@@ -57,6 +57,30 @@ MongoDB изнутри сети подключайте с указанием rep
 mongodb://root:<пароль>@mongodb:27017/?replicaSet=rs0&authSource=admin
 ```
 
+## Деплой на сервер
+
+Сервер за VPN, поэтому деплой — pull-моделью: сервер сам подтягивает `main` по systemd-таймеру. GitHub Actions остаётся только для CI (`deploy.yml` заготовлен на случай, если сервер станет доступен раннерам).
+
+Первичная установка (один раз, на сервере):
+
+```bash
+sudo mkdir -p /opt/infra && sudo chown "$USER" /opt/infra
+git clone https://github.com/sheridansss/infra.git /opt/infra
+cd /opt/infra
+bash generate-env.sh                 # пароли; при необходимости поправьте BIND_IP/порты
+docker compose up -d --wait
+bash deploy/install-autodeploy.sh    # systemd-таймер автодеплоя (по умолчанию каждые 2 мин)
+```
+
+Дальше каждый push в `main` приезжает на сервер в течение пары минут. Автодеплой не трогает `.env` и `backup/` (они не в git) и ничего не удаляет. Логи: `journalctl -u infra-autodeploy.service -f`.
+
+Задеплоить немедленно, не дожидаясь таймера (с машины с VPN-доступом):
+
+```bash
+bash deploy/deploy-now.sh user@server           # Linux/macOS/Git Bash
+.\deploy\deploy-now.ps1 -Server user@server     # Windows PowerShell
+```
+
 ## Почему MinIO пинован на старый тег
 
 MinIO прекратил публикацию community-образов (октябрь 2025), репозиторий заархивирован (апрель 2026). Используется `RELEASE.2025-04-22T22-12-26Z` — последний релиз с полноценной веб-консолью (пользователи, политики, access keys); в более поздних образах консоль урезана до браузера объектов. Обновлений безопасности для этого образа не будет. Если объектное хранилище критично для продакшена, рассмотрите активно поддерживаемые альтернативы: Garage, SeaweedFS, Ceph RGW или коммерческий MinIO AIStor.

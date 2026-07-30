@@ -1,5 +1,9 @@
 # Деплой стека на сервер по кнопке: Actions -> deploy -> Run workflow.
 #
+# ВНИМАНИЕ: пока сервер за VPN, раннер GitHub до него не достучится и этот
+# workflow не используется. Рабочая схема — pull-деплой с самого сервера,
+# см. каталог deploy/ и раздел «Деплой на сервер» в README.
+#
 # Требуемые secrets (Settings -> Secrets and variables -> Actions):
 #   DEPLOY_HOST     — адрес сервера
 #   DEPLOY_USER     — ssh-пользователь (должен состоять в группе docker)

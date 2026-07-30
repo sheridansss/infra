@@ -18,8 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: shellcheck generate-env.sh
-        run: shellcheck generate-env.sh
+      - name: shellcheck
+        run: shellcheck generate-env.sh deploy/*.sh
 
       - name: PSScriptAnalyzer generate-env.ps1
         shell: pwsh
