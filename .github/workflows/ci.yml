@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: shellcheck
-        run: shellcheck generate-env.sh deploy/*.sh
+        run: shellcheck generate-env.sh backup.sh backup-cold.sh deploy/*.sh
 
       - name: PSScriptAnalyzer generate-env.ps1
         shell: pwsh
@@ -75,6 +75,15 @@ jobs:
 
           curl -fsS "http://127.0.0.1:${PGADMIN_PORT}/misc/ping" | grep PING
           echo "pgadmin: OK"
+
+      - name: Бэкап на живом стеке (backup.sh)
+        run: |
+          bash backup.sh
+          LATEST=$(printf '%s\n' backup/????-??-??_?????? | tail -n 1)
+          for f in mongodb.archive.gz postgres.sql.gz redis.rdb rabbitmq-definitions.json minio.tar.gz manifest.txt; do
+            [ -s "$LATEST/$f" ] || { echo "отсутствует или пуст: $LATEST/$f"; exit 1; }
+          done
+          ls -l "$LATEST"
 
       - name: Диагностика при падении
         if: failure()
