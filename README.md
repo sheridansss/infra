@@ -72,7 +72,7 @@ docker compose up -d --wait
 bash deploy/install-autodeploy.sh    # systemd-таймер автодеплоя (по умолчанию каждые 2 мин)
 ```
 
-Дальше каждый push в `main` приезжает на сервер в течение пары минут. Автодеплой не трогает `.env` и `backup/` (они не в git) и ничего не удаляет. Логи: `journalctl -u infra-autodeploy.service -f`.
+Дальше каждый push в `main` приезжает на сервер в течение пары минут. Автодеплой не трогает `.env` и `backup/` (они не в git) и ничего не удаляет. Логи: `journalctl -u infra-autodeploy.service -f`. Выключить и удалить таймер: `bash deploy/uninstall-autodeploy.sh` (репозиторий и стек остаются).
 
 Задеплоить немедленно, не дожидаясь таймера (с машины с VPN-доступом):
 
@@ -92,6 +92,7 @@ bash deploy/deploy-now.sh user@server           # Linux/macOS/Git Bash
 
 ```bash
 bash deploy/install-backup-timer.sh        # своё расписание: ... "*-*-* 04:00:00"
+bash deploy/uninstall-backup-timer.sh      # выключить таймер (backup/ не трогает)
 ```
 
 Каталог `backup/` не в git и автодеплоем не затрагивается.
