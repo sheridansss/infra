@@ -1,0 +1,84 @@
+# Деплой стека на сервер по кнопке: Actions -> deploy -> Run workflow.
+#
+# Требуемые secrets (Settings -> Secrets and variables -> Actions):
+#   DEPLOY_HOST     — адрес сервера
+#   DEPLOY_USER     — ssh-пользователь (должен состоять в группе docker)
+#   DEPLOY_SSH_KEY  — приватный ssh-ключ; публичную часть добавить в authorized_keys
+# Опциональные variables:
+#   DEPLOY_PORT     — ssh-порт (по умолчанию 22)
+#   DEPLOY_PATH     — каталог на сервере (по умолчанию /opt/infra)
+#
+# Разовая подготовка сервера:
+#   curl -fsSL https://get.docker.com | sh
+#   sudo usermod -aG docker <user>
+#   sudo mkdir -p /opt/infra && sudo chown <user> /opt/infra
+#
+# .env на сервер не синхронизируется и не удаляется: при первом деплое он
+# генерируется на месте (BIND_IP=127.0.0.1 — наружу ничего не торчит,
+# пока сознательно не поменяете его на сервере).
+name: deploy
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || 22 }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/infra' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Проверить наличие secrets
+        run: |
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ]; then
+            echo "::error::Не заданы secrets DEPLOY_HOST / DEPLOY_USER / DEPLOY_SSH_KEY (см. шапку deploy.yml)"
+            exit 1
+          fi
+
+      - name: Настроить SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2> /dev/null
+
+      - name: Синхронизировать файлы
+        # .env* исключены (кроме .env.example) и защищены от --delete;
+        # backup/ — чтобы не удалить серверные бэкапы, лежащие рядом
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -p $DEPLOY_PORT" \
+            --exclude '.git' \
+            --include '.env.example' --exclude '.env*' \
+            --exclude 'backup/' \
+            ./ "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+
+      - name: Поднять стек на сервере
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            bash -s -- "$DEPLOY_PATH" <<'REMOTE'
+          set -euo pipefail
+          cd "$1"
+          if [ ! -f .env ]; then
+            echo "Первый деплой: генерирую .env со случайными паролями"
+            bash generate-env.sh
+          fi
+          docker compose pull --quiet
+          docker compose up -d --wait
+          docker compose ps
+          REMOTE

@@ -1,0 +1,83 @@
+# CI: линтеры скриптов + подъём всего стека на раннере и смоук-тест каждого сервиса.
+# Секретов не требует: .env генерируется на раннере нашим же generate-env.sh.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: shellcheck generate-env.sh
+        run: shellcheck generate-env.sh
+
+      - name: PSScriptAnalyzer generate-env.ps1
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $r = Invoke-ScriptAnalyzer -Path ./generate-env.ps1 -Severity Warning, Error
+          if ($r) { $r | Format-Table -AutoSize | Out-String | Write-Host }
+          if ($r | Where-Object Severity -eq 'Error') { exit 1 }
+
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Сгенерировать .env
+        run: bash generate-env.sh
+
+      - name: Валидация compose-файла
+        run: docker compose config --quiet
+
+      - name: Поднять стек и дождаться healthy
+        run: docker compose up -d --wait --quiet-pull
+
+      - name: Смоук-тесты всех сервисов
+        run: |
+          set -a; source .env; set +a
+
+          docker compose exec -T mongodb mongosh -u "$MONGO_ROOT_USER" -p "$MONGO_ROOT_PASSWORD" \
+            --authenticationDatabase admin --quiet --eval '
+              const st = rs.status();
+              if (st.members[0].stateStr != "PRIMARY") throw new Error("mongo is not PRIMARY");
+              const s = db.getMongo().startSession();
+              const col = s.getDatabase("smoke").t;
+              s.startTransaction(); col.insertOne({ok: 1}); s.commitTransaction();
+              db.getSiblingDB("smoke").dropDatabase();
+              print("mongo: replica set + transaction OK");
+            '
+
+          docker compose exec -T redis sh -c 'redis-cli set smoke 42 | grep OK && redis-cli get smoke | grep 42 && redis-cli del smoke > /dev/null'
+          echo "redis: OK"
+
+          curl -fsS -u "$RABBITMQ_USER:$RABBITMQ_PASSWORD" "http://127.0.0.1:${RABBITMQ_MANAGEMENT_PORT}/api/overview" | grep -o '"rabbitmq_version"'
+          echo "rabbitmq: OK"
+
+          curl -fsS "http://127.0.0.1:${MINIO_API_PORT}/minio/health/live"
+          docker compose exec -T minio sh -c "mc alias set local http://localhost:9000 '$MINIO_ROOT_USER' '$MINIO_ROOT_PASSWORD' > /dev/null && mc mb local/smoke && mc rb local/smoke"
+          echo "minio: OK"
+
+          docker compose exec -T postgres psql "postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_USER" \
+            -v ON_ERROR_STOP=1 -c 'CREATE TABLE smoke(id int); INSERT INTO smoke VALUES (1); DROP TABLE smoke;' > /dev/null
+          echo "postgres: OK"
+
+          curl -fsS "http://127.0.0.1:${PGADMIN_PORT}/misc/ping" | grep PING
+          echo "pgadmin: OK"
+
+      - name: Диагностика при падении
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail=100
