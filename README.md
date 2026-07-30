@@ -112,60 +112,18 @@ BACKUP_REMOTE=/mnt/nas/infra            # rsync в примонтированн�
 
 ### Восстановление из backup.sh
 
-MongoDB — коллекции заменяются содержимым дампа:
+Штатный путь — `restore.sh`: он повторяет проверенные процедуры и перед началом показывает, что будет перезаписано, с подтверждением (`--yes` — для неинтерактивного запуска):
 
 ```bash
-docker compose exec -T mongodb sh -c 'mongorestore -u "$MONGO_INITDB_ROOT_USERNAME" \
-  -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin \
-  --archive --gzip --drop --oplogReplay' < backup/<дата>/mongodb.archive.gz
+bash restore.sh latest                                 # весь стек из свежайшей копии
+bash restore.sh backup/2026-07-30_233443 redis postgres  # выборочно, из конкретной
 ```
 
-PostgreSQL — восстановление в чистый кластер (текущие данные удаляются):
+По сервисам: MongoDB — `mongorestore --drop --oplogReplay` (коллекции заменяются); PostgreSQL — пересоздание кластера (volume) и загрузка `pg_dumpall` (сообщение `role "postgres" already exists` — норма); Redis — загрузка RDB-снапшота одноразовым сервером без AOF с последующим включением AOF (при включённом AOF Redis игнорирует `dump.rdb`, даже когда AOF-файлов нет); RabbitMQ — `rabbitmqctl import_definitions` поверх текущих; MinIO — `mc mirror --overwrite` поверх текущих.
 
-```bash
-docker compose rm -sf postgres
-docker volume rm services_pg_data
-docker compose up -d --wait postgres
-gunzip -c backup/<дата>/postgres.sql.gz | docker compose exec -T postgres \
-  sh -c 'psql -q -U "$POSTGRES_USER" -d postgres'
-```
+Этот же цикл «бэкап → потеря данных → restore.sh → проверка» CI гоняет на каждом коммите.
 
-Сообщение `role "postgres" already exists` в процессе — норма (роль создана при инициализации кластера).
-
-Redis — при включённом AOF Redis на старте читает только AOF и игнорирует `dump.rdb` (даже если AOF-файлов нет — тогда он стартует пустым). Поэтому снапшот загружаем одноразовым сервером без AOF, включаем AOF уже на загруженных данных и отдаём том штатному контейнеру:
-
-```bash
-docker compose stop redis
-docker run --rm -i -v services_redis_data:/data alpine:3 \
-  sh -c 'rm -rf /data/appendonlydir && cat > /data/dump.rdb' < backup/<дата>/redis.rdb
-docker run --rm -d --name redis-restore -v services_redis_data:/data \
-  redis:8-alpine redis-server --appendonly no
-docker exec redis-restore sh -c '
-  until redis-cli ping 2>/dev/null | grep -q PONG; do sleep 1; done
-  redis-cli config set appendonly yes > /dev/null
-  while redis-cli info persistence | grep -Eq "aof_rewrite_in_progress:1|aof_rewrite_scheduled:1"; do sleep 1; done
-  echo "загружено ключей: $(redis-cli dbsize)"'
-docker stop redis-restore
-docker compose start redis
-```
-
-RabbitMQ — definitions импортируются поверх текущих (ничего не удаляют):
-
-```bash
-docker compose cp backup/<дата>/rabbitmq-definitions.json rabbitmq:/tmp/defs.json
-docker compose exec -T rabbitmq sh -c 'rabbitmqctl import_definitions /tmp/defs.json && rm /tmp/defs.json'
-```
-
-MinIO — объекты дозаписываются поверх текущих:
-
-```bash
-mkdir -p restore-minio && tar -xzf backup/<дата>/minio.tar.gz -C restore-minio
-docker compose cp restore-minio minio:/tmp/minio-restore
-docker compose exec -T minio sh -c 'mc alias set local http://localhost:9000 \
-  "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" > /dev/null \
-  && mc mirror --overwrite /tmp/minio-restore local/ && rm -rf /tmp/minio-restore'
-rm -rf restore-minio
-```
+Нестандартные случаи (одна база или коллекция, перенос на другую машину) — штатными инструментами вручную: `mongorestore --nsInclude ...`, `psql -d <база>`, `mc mirror local/<бакет> ...`; готовые последовательности команд — внутри `restore.sh`.
 
 ### Восстановление из backup-cold.sh
 

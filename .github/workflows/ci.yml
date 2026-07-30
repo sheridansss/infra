@@ -76,14 +76,37 @@ jobs:
           curl -fsS "http://127.0.0.1:${PGADMIN_PORT}/misc/ping" | grep PING
           echo "pgadmin: OK"
 
-      - name: Бэкап на живом стеке (backup.sh)
+      - name: Цикл аварии — бэкап, потеря данных, restore.sh
         run: |
+          # маркерные данные в каждом сервисе
+          docker compose exec -T mongodb sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "db.getSiblingDB(\"drtest\").t.insertOne({probe: 777})"' > /dev/null
+          docker compose exec -T postgres sh -c 'psql -q -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE drtest" && psql -q -U "$POSTGRES_USER" -d drtest -c "CREATE TABLE probe(v int); INSERT INTO probe VALUES (777)"'
+          docker compose exec -T redis redis-cli set dr:probe 777 > /dev/null
+          docker compose exec -T rabbitmq rabbitmqctl -q add_user dr_probe secret777
+          docker compose exec -T minio sh -c 'mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" > /dev/null && mc mb -p local/drtest > /dev/null && echo probe-777 | mc pipe local/drtest/probe.txt > /dev/null'
+
           bash backup.sh
           LATEST=$(printf '%s\n' backup/????-??-??_?????? | tail -n 1)
           for f in mongodb.archive.gz postgres.sql.gz redis.rdb rabbitmq-definitions.json minio.tar.gz manifest.txt; do
             [ -s "$LATEST/$f" ] || { echo "отсутствует или пуст: $LATEST/$f"; exit 1; }
           done
-          ls -l "$LATEST"
+
+          # "авария": уничтожаем маркеры
+          docker compose exec -T mongodb sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "db.getSiblingDB(\"drtest\").dropDatabase()"' > /dev/null
+          docker compose exec -T postgres sh -c 'psql -q -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE drtest"'
+          docker compose exec -T redis redis-cli del dr:probe > /dev/null
+          docker compose exec -T rabbitmq rabbitmqctl -q delete_user dr_probe
+          docker compose exec -T minio sh -c 'mc rb --force local/drtest' > /dev/null
+
+          bash restore.sh latest --yes
+
+          # всё должно вернуться
+          docker compose exec -T mongodb sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "const v = db.getSiblingDB(\"drtest\").t.findOne().probe; if (v != 777) throw new Error(\"mongo: \" + v)"'
+          docker compose exec -T postgres sh -c 'psql -t -A -U "$POSTGRES_USER" -d drtest -c "SELECT v FROM probe"' | grep -qx 777
+          docker compose exec -T redis redis-cli get dr:probe | grep -q 777
+          docker compose exec -T rabbitmq rabbitmqctl -q list_users | grep -q dr_probe
+          docker compose exec -T minio sh -c 'mc cat local/drtest/probe.txt' | grep -q probe-777
+          echo "DR-цикл пройден: все маркеры восстановлены"
 
       - name: Выгрузка наружу (backup-sync.sh, оба режима)
         run: |
