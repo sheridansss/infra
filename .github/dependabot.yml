@@ -1,0 +1,18 @@
+# Автообновления: PR с новыми тегами образов и версиями actions.
+# Каждый такой PR прогоняет весь CI (смоук + DR-цикл + сканы) —
+# это и есть проверка обновления перед выкаткой.
+version: 2
+updates:
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # Пинован сознательно: последний community-образ с полноценной веб-консолью,
+      # более новые теги урезаны. См. README, «Почему MinIO пинован».
+      - dependency-name: minio/minio
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

@@ -1,0 +1,71 @@
+# Сканирование безопасности: CVE в образах стека и поиск секретов в файлах
+# репозитория. Кроме push/PR запускается еженедельно по расписанию: CVE появляются
+# и без наших коммитов.
+# Политика: CI валят только CRITICAL-находки с доступным фиксом (--ignore-unfixed) —
+# HIGH показываются в логе, но не блокируют: в официальных образах они часто
+# неустранимы с нашей стороны (уязвимости в вшитых бинарниках вроде gosu, которые
+# апстрим пересобирает месяцами). MinIO пинован на EOL-образ сознательно
+# (см. README) — его отчёт целиком информационный.
+# Misconfig-скан не подключён: trivy не поддерживает docker-compose, а других
+# IaC-файлов (Dockerfile, k8s, terraform) в репозитории нет.
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1" # понедельник 03:17 UTC
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          version: v0.72.0
+
+      - name: Сгенерировать .env (нужен для docker compose config)
+        run: bash generate-env.sh
+
+      - name: CVE-скан образов (гейт — CRITICAL; HIGH и MinIO — информационно)
+        run: |
+          FAILED=0
+          for IMG in $(docker compose config --images | sort -u); do
+            case "$IMG" in
+              minio/minio:*)
+                echo "::group::$IMG — EOL, пинован сознательно, отчёт информационный"
+                trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 "$IMG"
+                echo "::endgroup::"
+                ;;
+              *)
+                echo "::group::$IMG"
+                trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 "$IMG"
+                # гейт отдельным быстрым проходом (БД и слои уже в кеше)
+                trivy image --severity CRITICAL --ignore-unfixed --exit-code 1 --quiet "$IMG" || FAILED=1
+                echo "::endgroup::"
+                ;;
+            esac
+          done
+          exit "$FAILED"
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          version: v0.72.0
+
+      - name: Скан секретов в файлах репозитория
+        run: trivy fs --scanners secret --exit-code 1 .
