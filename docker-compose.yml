@@ -6,7 +6,7 @@ services:
   # Одноразовый init: генерирует keyFile для внутренней аутентификации
   # replica set (обязателен, когда включена авторизация). Идемпотентен.
   mongo-keyfile:
-    image: mongo:8.0
+    image: mongo:8.2
     restart: "no"
     entrypoint:
       - bash
@@ -22,7 +22,7 @@ services:
     networks: [backend]
 
   mongodb:
-    image: mongo:8.0
+    image: mongo:8.2
     # стабильный hostname: он прописан в конфиге replica set (host: mongodb:27017)
     hostname: mongodb
     restart: unless-stopped
