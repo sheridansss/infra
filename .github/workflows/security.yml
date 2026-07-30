@@ -6,8 +6,8 @@
 # неустранимы с нашей стороны (уязвимости в вшитых бинарниках вроде gosu, которые
 # апстрим пересобирает месяцами). MinIO пинован на EOL-образ сознательно
 # (см. README) — его отчёт целиком информационный.
-# Misconfig-скан не подключён: trivy не поддерживает docker-compose, а других
-# IaC-файлов (Dockerfile, k8s, terraform) в репозитории нет.
+# Misconfig-скан — KICS (trivy docker-compose не поддерживает): проверки
+# compose-файла и workflows, гейт по HIGH/MEDIUM, осознанные исключения — ниже.
 name: security
 
 on:
@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: aquasecurity/setup-trivy@v0.3.1
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.72.0
 
@@ -58,13 +58,32 @@ jobs:
           done
           exit "$FAILED"
 
+  misconfig:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # Исключённые проверки (обоснование):
+      #   487f4be7 (Passwords And Secrets) — FP на compose-интерполяции ${VAR:?...};
+      #     настоящие секреты ищет джоб secrets (trivy)
+      #   ce76b7d0 (Container Capabilities) — cap_drop под entrypoint'ы чужих
+      #     официальных образов хрупок при их обновлениях; принято
+      - name: KICS misconfig-скан (docker-compose, workflows)
+        uses: checkmarx/kics-github-action@05aa5eb70eede1355220f4ca5238d96b397e30a6 # v2.1.20
+        with:
+          path: .
+          fail_on: high,medium
+          exclude_paths: backup,.git
+          exclude_queries: 487f4be7-3fd9-4506-a07a-eae252180c08,ce76b7d0-9e77-464d-b86f-c5c48e03e22d
+
   secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
-      - uses: aquasecurity/setup-trivy@v0.3.1
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v0.72.0
 
