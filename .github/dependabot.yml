@@ -11,6 +11,15 @@ updates:
       # Пинован сознательно: последний community-образ с полноценной веб-консолью,
       # более новые теги урезаны. См. README, «Почему MinIO пинован».
       - dependency-name: minio/minio
+      # Едем по major-линейке MongoDB (5 лет поддержки). Minor-релизы (8.2, 8.3)
+      # нельзя пропускать при апгрейдах — это обязательство обновляться каждый
+      # квартал, не для нашего стека. Предлагать только следующий major.
+      - dependency-name: mongo
+        update-types: ["version-update:semver-minor"]
+      # Плаваем на мажорном теге 9 (минорные приезжают через compose pull).
+      # У образа есть датированные snapshot-теги (2026-06-16-1), которые
+      # Dependabot считает «новее» — шум. Следующий мажор возьмём руками.
+      - dependency-name: dpage/pgadmin4
 
   - package-ecosystem: github-actions
     directory: /
