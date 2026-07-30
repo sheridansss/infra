@@ -50,7 +50,8 @@ jobs:
                 echo "::group::$IMG"
                 trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 "$IMG"
                 # гейт отдельным быстрым проходом (БД и слои уже в кеше)
-                trivy image --severity CRITICAL --ignore-unfixed --exit-code 1 --quiet "$IMG" || FAILED=1
+                trivy image --severity CRITICAL --ignore-unfixed --exit-code 1 --quiet "$IMG" \
+                  || { FAILED=1; echo "::error::CRITICAL с доступным фиксом в $IMG — детали в логе выше"; }
                 echo "::endgroup::"
                 ;;
             esac
