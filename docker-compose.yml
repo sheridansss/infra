@@ -138,7 +138,7 @@ services:
       start_period: 15s
 
   pgadmin:
-    image: dpage/pgadmin4:9
+    image: dpage/pgadmin4:2026-06-16-1
     restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:?is not set, see .env.example}
