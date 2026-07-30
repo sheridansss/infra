@@ -94,7 +94,21 @@ bash deploy/deploy-now.sh user@server           # Linux/macOS/Git Bash
 bash deploy/install-backup-timer.sh        # своё расписание: ... "*-*-* 04:00:00"
 ```
 
-Каталог `backup/` не в git и автодеплоем не затрагивается. Бэкап на том же диске не защищает от гибели сервера — периодически забирайте копии наружу (rsync, rclone).
+Каталог `backup/` не в git и автодеплоем не затрагивается.
+
+### Выгрузка наружу
+
+Бэкап на том же диске не защищает от гибели сервера. Задайте `BACKUP_REMOTE` в `.env` — и каждый запуск `backup.sh` (в том числе по таймеру) будет заканчиваться зеркалированием `backup/` во внешнее хранилище; вручную — `bash backup-sync.sh`:
+
+```bash
+BACKUP_REMOTE=s3:bucket/infra-backup    # rclone-remote: сначала rclone config на сервере
+BACKUP_REMOTE=user@host:/backups/infra  # rsync по SSH: ключ без пароля, каталог должен существовать
+BACKUP_REMOTE=/mnt/nas/infra            # rsync в примонтированный каталог (NAS)
+```
+
+Это зеркало 1-в-1: ротация применяется и к удалённой копии, удалённый локально `cold-*` исчезнет и там. Пустой локальный `backup/` внешнюю копию не затирает — скрипт откажется выгружать. Дампы содержат данные БД, поэтому хранилище должно быть приватным.
+
+Вернуть бэкапы на новый сервер: `rclone copy s3:bucket/infra-backup backup/` либо `rsync -a user@host:/backups/infra/ backup/`.
 
 ### Восстановление из backup.sh
 

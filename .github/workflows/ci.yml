@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: shellcheck
-        run: shellcheck generate-env.sh backup.sh backup-cold.sh deploy/*.sh
+        run: shellcheck generate-env.sh backup.sh backup-cold.sh backup-sync.sh deploy/*.sh
 
       - name: PSScriptAnalyzer generate-env.ps1
         shell: pwsh
@@ -84,6 +84,32 @@ jobs:
             [ -s "$LATEST/$f" ] || { echo "отсутствует или пуст: $LATEST/$f"; exit 1; }
           done
           ls -l "$LATEST"
+
+      - name: Выгрузка наружу (backup-sync.sh, оба режима)
+        run: |
+          sudo apt-get -qq update && sudo apt-get -qq install -y rclone
+
+          # без BACKUP_REMOTE — тихий пропуск
+          bash backup-sync.sh | grep -q "не настроена"
+
+          # режим rsync (локальный путь) и режим rclone (on-the-fly local-remote)
+          BACKUP_REMOTE=/tmp/offsite-rsync bash backup-sync.sh
+          diff -r backup /tmp/offsite-rsync
+          BACKUP_REMOTE=":local:/tmp/offsite-rclone" bash backup-sync.sh
+          diff -r backup /tmp/offsite-rclone
+
+          # ротация доезжает до зеркала: удалённый локально каталог исчезает и там
+          rm -rf backup/????-??-??_??????
+          mkdir -p backup/2099-01-01_000000 && echo x > backup/2099-01-01_000000/manifest.txt
+          BACKUP_REMOTE=/tmp/offsite-rsync bash backup-sync.sh
+          diff -r backup /tmp/offsite-rsync
+
+          # страховка: пустой локальный backup/ не затирает внешнюю копию
+          rm -rf backup/*
+          if BACKUP_REMOTE=/tmp/offsite-rsync bash backup-sync.sh; then
+            echo "страховка от пустого backup/ не сработала"; exit 1
+          fi
+          test -n "$(ls /tmp/offsite-rsync)"
 
       - name: Диагностика при падении
         if: failure()
