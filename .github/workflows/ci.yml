@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: shellcheck
-        run: shellcheck generate-env.sh backup.sh backup-cold.sh backup-sync.sh deploy/*.sh
+        run: shellcheck generate-env.sh backup.sh backup-cold.sh backup-sync.sh restore.sh deploy/*.sh
 
       - name: PSScriptAnalyzer generate-env.ps1
         shell: pwsh
@@ -133,6 +133,42 @@ jobs:
             echo "страховка от пустого backup/ не сработала"; exit 1
           fi
           test -n "$(ls /tmp/offsite-rsync)"
+
+      - name: Профили — частичный состав стека и страховка автодеплоя
+        run: |
+          # с одним профилем в списке активен ровно один сервис
+          test "$(COMPOSE_PROFILES=redis docker compose config --services)" = "redis"
+
+          # страховка автодеплоя: .env без COMPOSE_PROFILES получает полный список
+          sed -i '/^COMPOSE_PROFILES=/d' .env
+          bash deploy/ensure-profiles.sh
+          grep -q '^COMPOSE_PROFILES=mongodb,redis,rabbitmq,minio,postgres,pgadmin$' .env
+          test "$(docker compose config --services | sort | xargs)" = "minio mongo-keyfile mongodb pgadmin postgres rabbitmq redis"
+
+          # реальное выключение: оставляем redis и postgres, apply-profiles
+          # должен остановить и удалить остальные контейнеры (volumes остаются)
+          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=redis,postgres/' .env
+          bash deploy/apply-profiles.sh
+          test "$(docker compose ps -a --services | sort | xargs)" = "postgres redis"
+          docker volume inspect services_minio_data > /dev/null
+
+          # бэкап и restore работают только с включённым набором
+          bash backup.sh
+          LATEST=$(printf '%s\n' backup/????-??-??_?????? | tail -n 1)
+          test -s "$LATEST/redis.rdb"
+          test -s "$LATEST/postgres.sql.gz"
+          test ! -e "$LATEST/minio.tar.gz"
+          grep -q '^services: postgres redis$' "$LATEST/manifest.txt"
+          bash restore.sh latest --yes
+          if bash restore.sh latest --yes minio; then
+            echo "restore.sh должен отказываться восстанавливать выключенный сервис"; exit 1
+          fi
+
+          # вернуть полный состав — выключение обратимо
+          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,redis,rabbitmq,minio,postgres,pgadmin/' .env
+          bash deploy/apply-profiles.sh
+          docker compose ps --services | grep -qx minio
+          echo "профили: частичный состав, страховка и возврат — OK"
 
       - name: Диагностика при падении
         if: failure()

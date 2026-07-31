@@ -20,9 +20,18 @@ cd "$(dirname "$0")"
 
 ALL_SERVICES=(mongodb postgres redis rabbitmq minio)
 
+# Включённые сервисы: состав стека задаёт COMPOSE_PROFILES в .env.
+ENABLED_LIST="$(docker compose config --services)"
+ENABLED=()
+for SVC in "${ALL_SERVICES[@]}"; do
+  if grep -qx "$SVC" <<< "$ENABLED_LIST"; then
+    ENABLED+=("$SVC")
+  fi
+done
+
 usage() {
   echo "использование: restore.sh <backup/<дата> | latest> [--yes] [сервис...]" >&2
-  echo "сервисы: ${ALL_SERVICES[*]} (без указания — все)" >&2
+  echo "сервисы: ${ALL_SERVICES[*]} (без указания — все включённые в COMPOSE_PROFILES)" >&2
   exit 1
 }
 
@@ -42,7 +51,19 @@ for ARG in "$@"; do
       ;;
   esac
 done
-[ "${#SERVICES[@]}" -gt 0 ] || SERVICES=("${ALL_SERVICES[@]}")
+[ "${#SERVICES[@]}" -gt 0 ] || SERVICES=("${ENABLED[@]}")
+if [ "${#SERVICES[@]}" -eq 0 ]; then
+  echo "в COMPOSE_PROFILES нет ни одного сервиса с данными — нечего восстанавливать" >&2
+  exit 1
+fi
+
+# Явно названный, но выключенный сервис — ошибка до каких-либо действий.
+for SVC in "${SERVICES[@]}"; do
+  if ! grep -qx "$SVC" <<< "$ENABLED_LIST"; then
+    echo "сервис $SVC отключён в COMPOSE_PROFILES (.env) — включите его и выполните docker compose up -d" >&2
+    exit 1
+  fi
+done
 
 if [ "$SRC" = "latest" ]; then
   shopt -s nullglob

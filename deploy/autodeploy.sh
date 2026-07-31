@@ -35,8 +35,14 @@ if [ ! -f .env ]; then
   echo "первый деплой: генерирую .env"
   bash generate-env.sh
 fi
+# .env со времён до профилей не знает COMPOSE_PROFILES — дописать до первого
+# docker compose, иначе активный набор сервисов окажется пустым
+bash deploy/ensure-profiles.sh
 
 docker compose pull --quiet
-docker compose up -d --wait
+# apply-profiles: поднимает включённые в COMPOSE_PROFILES сервисы, а контейнеры
+# выключенных (или убранных из compose-файла) останавливает и удаляет —
+# данные остаются в volumes
+bash deploy/apply-profiles.sh
 docker compose ps --format 'table {{.Service}}\t{{.Status}}'
 echo "готово: $(git rev-parse --short HEAD)"
