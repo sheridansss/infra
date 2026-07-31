@@ -286,8 +286,9 @@ services:
       start_period: 30s
 
   # Метрики хоста. Смонтированный / — read-only, стандартная схема
-  # node-exporter (--path.rootfs); наружу порт не публикуется.
-  # kics-scan ignore-block
+  # node-exporter (--path.rootfs); наружу порт не публикуется. Маунт без
+  # rslave: Docker Desktop не поддерживает propagation для /, а для метрик
+  # CPU/RAM/диска она и не нужна.
   node-exporter:
     image: quay.io/prometheus/node-exporter:v1.12.1
     profiles: ["monitoring"]
@@ -296,8 +297,7 @@ services:
     command:
       - --path.rootfs=/host
     volumes:
-      # без rslave: Docker Desktop не поддерживает propagation для /,
-      # а для метрик CPU/RAM/диска она и не нужна
+      # kics-scan ignore-line
       - /:/host:ro
     networks: [backend]
     healthcheck:
@@ -308,8 +308,9 @@ services:
       start_period: 15s
 
   # Метрики контейнеров. docker.sock и системные каталоги — read-only,
-  # стандартная схема cAdvisor; наружу порт не публикуется.
-  # kics-scan ignore-block
+  # стандартная схема cAdvisor; наружу порт не публикуется. containerd.sock
+  # обязателен: docker-фабрика cadvisor ходит через containerd, без него
+  # метрики будут без имён контейнеров.
   cadvisor:
     # git-теги cadvisor уходят вперёд, образы публикуются выборочно —
     # пиновать только на реально существующий тег в gcr
@@ -318,12 +319,15 @@ services:
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
     volumes:
+      # kics-scan ignore-line
       - /:/rootfs:ro
+      # kics-scan ignore-line
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # docker-фабрика cadvisor ходит через containerd — без этого сокета
-      # метрики будут без имён контейнеров
+      # kics-scan ignore-line
       - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
+      # kics-scan ignore-line
       - /sys:/sys:ro
+      # kics-scan ignore-line
       - /var/lib/docker:/var/lib/docker:ro
     networks: [backend]
     healthcheck:
