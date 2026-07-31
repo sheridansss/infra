@@ -73,7 +73,8 @@ jobs:
           echo "minio: OK"
 
           curl -fsS "http://127.0.0.1:${SEAWEEDFS_S3_PORT}/status" > /dev/null
-          curl -fsS "http://127.0.0.1:${SEAWEEDFS_ADMIN_PORT}/" | grep -qi seaweedfs
+          # админка отвечает редиректом на /login — нужен -L
+          curl -fsSL "http://127.0.0.1:${SEAWEEDFS_ADMIN_PORT}/" | grep -qi seaweedfs
           docker compose --profile tools run --rm -T s3-client mkdir s3:smoke
           docker compose --profile tools run --rm -T s3-client rmdir s3:smoke
           echo "seaweedfs: OK"
