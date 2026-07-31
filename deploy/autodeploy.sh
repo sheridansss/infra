@@ -35,9 +35,9 @@ if [ ! -f .env ]; then
   echo "первый деплой: генерирую .env"
   bash generate-env.sh
 fi
-# .env со времён до профилей не знает COMPOSE_PROFILES — дописать до первого
-# docker compose, иначе активный набор сервисов окажется пустым
-bash deploy/ensure-profiles.sh
+# старый .env может не знать про недавно добавленные переменные
+# (COMPOSE_PROFILES, SEAWEEDFS_*) — дописать до первого docker compose
+bash deploy/ensure-env.sh
 
 docker compose pull --quiet
 # apply-profiles: поднимает включённые в COMPOSE_PROFILES сервисы, а контейнеры

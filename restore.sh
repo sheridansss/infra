@@ -5,11 +5,12 @@
 #   bash restore.sh latest                          # весь стек из свежайшей копии
 #   bash restore.sh backup/2026-07-30_232627 redis  # один сервис из конкретной
 # Что делает по сервисам:
-#   mongodb  — mongorestore --drop --oplogReplay (коллекции заменяются)
-#   postgres — пересоздаёт кластер (volume) и заливает pg_dumpall
-#   redis    — подкладывает RDB-снапшот через одноразовый сервер без AOF
-#   rabbitmq — rabbitmqctl import_definitions поверх текущих
-#   minio    — mc mirror --overwrite поверх текущих
+#   mongodb   — mongorestore --drop --oplogReplay (коллекции заменяются)
+#   postgres  — пересоздаёт кластер (volume) и заливает pg_dumpall
+#   redis     — подкладывает RDB-снапшот через одноразовый сервер без AOF
+#   rabbitmq  — rabbitmqctl import_definitions поверх текущих
+#   seaweedfs — rclone copy поверх текущих (через s3-client)
+#   minio     — mc mirror --overwrite поверх текущих
 # Холодные бэкапы (backup/cold-*) восстанавливаются иначе — см. README.
 set -euo pipefail
 
@@ -18,7 +19,7 @@ export MSYS_NO_PATHCONV=1
 
 cd "$(dirname "$0")"
 
-ALL_SERVICES=(mongodb postgres redis rabbitmq minio)
+ALL_SERVICES=(mongodb postgres redis rabbitmq seaweedfs minio)
 
 # Включённые сервисы: состав стека задаёт COMPOSE_PROFILES в .env.
 ENABLED_LIST="$(docker compose config --services)"
@@ -44,7 +45,7 @@ SERVICES=()
 for ARG in "$@"; do
   case "$ARG" in
     --yes) YES=1 ;;
-    mongodb | postgres | redis | rabbitmq | minio) SERVICES+=("$ARG") ;;
+    mongodb | postgres | redis | rabbitmq | seaweedfs | minio) SERVICES+=("$ARG") ;;
     *)
       echo "неизвестный аргумент: $ARG" >&2
       usage
@@ -83,6 +84,7 @@ declare -A FILE=(
   [postgres]=postgres.sql.gz
   [redis]=redis.rdb
   [rabbitmq]=rabbitmq-definitions.json
+  [seaweedfs]=seaweedfs.tar.gz
   [minio]=minio.tar.gz
 )
 for SVC in "${SERVICES[@]}"; do
@@ -161,6 +163,23 @@ restore_rabbitmq() {
   echo "--- rabbitmq: import_definitions..."
   docker compose cp "$SRC/rabbitmq-definitions.json" rabbitmq:/tmp/defs.json
   docker compose exec -T rabbitmq sh -c 'rabbitmqctl import_definitions /tmp/defs.json && rm /tmp/defs.json'
+}
+
+restore_seaweedfs() {
+  echo "--- seaweedfs: rclone copy поверх текущих..."
+  local TMP="$SRC/seaweedfs-restore.tmp"
+  rm -rf "$TMP" && mkdir -p "$TMP"
+  tar -xzf "$SRC/seaweedfs.tar.gz" -C "$TMP"
+  if [ -z "$(find "$TMP" -mindepth 1 -print -quit)" ]; then
+    echo "    в бэкапе нет бакетов — нечего восстанавливать"
+    rm -rf "$TMP"
+    return 0
+  fi
+  local HOSTPWD
+  HOSTPWD="$(pwd -W 2>/dev/null || pwd)"
+  docker compose --profile tools run --rm -T \
+    -v "$HOSTPWD/$TMP:/restore:ro" s3-client copy --quiet /restore s3:
+  rm -rf "$TMP"
 }
 
 restore_minio() {

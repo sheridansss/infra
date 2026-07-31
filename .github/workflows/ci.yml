@@ -36,7 +36,10 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Сгенерировать .env
-        run: bash generate-env.sh
+        run: |
+          bash generate-env.sh
+          # CI тестирует всё, включая опциональный minio (по умолчанию выключен)
+          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,redis,rabbitmq,seaweedfs,minio,postgres,pgadmin/' .env
 
       - name: Валидация compose-файла
         run: docker compose config --quiet
@@ -69,6 +72,12 @@ jobs:
           docker compose exec -T minio sh -c "mc alias set local http://localhost:9000 '$MINIO_ROOT_USER' '$MINIO_ROOT_PASSWORD' > /dev/null && mc mb local/smoke && mc rb local/smoke"
           echo "minio: OK"
 
+          curl -fsS "http://127.0.0.1:${SEAWEEDFS_S3_PORT}/status" > /dev/null
+          curl -fsS "http://127.0.0.1:${SEAWEEDFS_ADMIN_PORT}/" | grep -qi seaweedfs
+          docker compose --profile tools run --rm -T s3-client mkdir s3:smoke
+          docker compose --profile tools run --rm -T s3-client rmdir s3:smoke
+          echo "seaweedfs: OK"
+
           docker compose exec -T postgres psql "postgresql://$POSTGRES_USER:$POSTGRES_PASSWORD@localhost:5432/$POSTGRES_USER" \
             -v ON_ERROR_STOP=1 -c 'CREATE TABLE smoke(id int); INSERT INTO smoke VALUES (1); DROP TABLE smoke;' > /dev/null
           echo "postgres: OK"
@@ -84,10 +93,12 @@ jobs:
           docker compose exec -T redis redis-cli set dr:probe 777 > /dev/null
           docker compose exec -T rabbitmq rabbitmqctl -q add_user dr_probe secret777
           docker compose exec -T minio sh -c 'mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" > /dev/null && mc mb -p local/drtest > /dev/null && echo probe-777 | mc pipe local/drtest/probe.txt > /dev/null'
+          docker compose --profile tools run --rm -T s3-client mkdir s3:drtest
+          echo probe-777 | docker compose --profile tools run --rm -T s3-client rcat s3:drtest/probe.txt
 
           bash backup.sh
           LATEST=$(printf '%s\n' backup/????-??-??_?????? | tail -n 1)
-          for f in mongodb.archive.gz postgres.sql.gz redis.rdb rabbitmq-definitions.json minio.tar.gz manifest.txt; do
+          for f in mongodb.archive.gz postgres.sql.gz redis.rdb rabbitmq-definitions.json seaweedfs.tar.gz minio.tar.gz manifest.txt; do
             [ -s "$LATEST/$f" ] || { echo "отсутствует или пуст: $LATEST/$f"; exit 1; }
           done
 
@@ -97,6 +108,7 @@ jobs:
           docker compose exec -T redis redis-cli del dr:probe > /dev/null
           docker compose exec -T rabbitmq rabbitmqctl -q delete_user dr_probe
           docker compose exec -T minio sh -c 'mc rb --force local/drtest' > /dev/null
+          docker compose --profile tools run --rm -T s3-client purge s3:drtest
 
           bash restore.sh latest --yes
 
@@ -106,6 +118,7 @@ jobs:
           docker compose exec -T redis redis-cli get dr:probe | grep -q 777
           docker compose exec -T rabbitmq rabbitmqctl -q list_users | grep -q dr_probe
           docker compose exec -T minio sh -c 'mc cat local/drtest/probe.txt' | grep -q probe-777
+          docker compose --profile tools run --rm -T s3-client cat s3:drtest/probe.txt | grep -q probe-777
           echo "DR-цикл пройден: все маркеры восстановлены"
 
       - name: Выгрузка наружу (backup-sync.sh, оба режима)
@@ -139,10 +152,15 @@ jobs:
           # с одним профилем в списке активен ровно один сервис
           test "$(COMPOSE_PROFILES=redis docker compose config --services)" = "redis"
 
-          # страховка автодеплоя: .env без COMPOSE_PROFILES получает полный список
-          sed -i '/^COMPOSE_PROFILES=/d' .env
-          bash deploy/ensure-profiles.sh
+          # страховка автодеплоя: старый .env (без COMPOSE_PROFILES и SEAWEEDFS_*)
+          # получает прежний состав сервисов и креды SeaweedFS. Пароль возвращаем,
+          # чтобы .env остался согласован с уже запущенным контейнером.
+          PW=$(sed -n 's/^SEAWEEDFS_PASSWORD=//p' .env)
+          sed -i '/^COMPOSE_PROFILES=/d; /^SEAWEEDFS_USER=/d; /^SEAWEEDFS_PASSWORD=/d' .env
+          bash deploy/ensure-env.sh
           grep -q '^COMPOSE_PROFILES=mongodb,redis,rabbitmq,minio,postgres,pgadmin$' .env
+          grep -q '^SEAWEEDFS_PASSWORD=..*' .env
+          sed -i "s/^SEAWEEDFS_PASSWORD=.*/SEAWEEDFS_PASSWORD=$PW/" .env
           test "$(docker compose config --services | sort | xargs)" = "minio mongo-keyfile mongodb pgadmin postgres rabbitmq redis"
 
           # реальное выключение: оставляем redis и postgres, apply-profiles
@@ -165,9 +183,10 @@ jobs:
           fi
 
           # вернуть полный состав — выключение обратимо
-          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,redis,rabbitmq,minio,postgres,pgadmin/' .env
+          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,redis,rabbitmq,seaweedfs,minio,postgres,pgadmin/' .env
           bash deploy/apply-profiles.sh
           docker compose ps --services | grep -qx minio
+          docker compose ps --services | grep -qx seaweedfs
           echo "профили: частичный состав, страховка и возврат — OK"
 
       - name: Диагностика при падении

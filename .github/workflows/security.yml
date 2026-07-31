@@ -39,7 +39,9 @@ jobs:
       - name: CVE-скан образов (гейт — CRITICAL; HIGH и MinIO — информационно)
         run: |
           FAILED=0
-          for IMG in $(docker compose config --images | sort -u); do
+          # --profile '*': сканируем ВСЕ описанные образы, включая выключенные
+          # по умолчанию профили (minio) и одноразовые инструменты (s3-client)
+          for IMG in $(docker compose --profile '*' config --images | sort -u); do
             case "$IMG" in
               minio/minio:*)
                 echo "::group::$IMG — EOL, пинован сознательно, отчёт информационный"

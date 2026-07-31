@@ -24,7 +24,7 @@ fi
 # конкретного бэкапа записывается в его manifest.txt.
 ENABLED="$(docker compose config --services)"
 SERVICES=()
-for SVC in mongodb postgres redis rabbitmq minio; do
+for SVC in mongodb postgres redis rabbitmq seaweedfs minio; do
   if grep -qx "$SVC" <<< "$ENABLED"; then
     SERVICES+=("$SVC")
   fi
@@ -80,6 +80,18 @@ fi
 if want rabbitmq; then
   echo "rabbitmq: export_definitions..."
   docker compose exec -T rabbitmq rabbitmqctl export_definitions - > "$DEST/rabbitmq-definitions.json"
+fi
+
+if want seaweedfs; then
+  echo "seaweedfs: rclone sync..."
+  # Зеркалим все бакеты одноразовым rclone-контейнером (s3-client в compose).
+  # pwd -W в Git Bash даёт windows-путь для docker -v; на Linux — обычный pwd.
+  HOSTPWD="$(pwd -W 2>/dev/null || pwd)"
+  mkdir -p "$DEST/seaweedfs-mirror"
+  docker compose --profile tools run --rm -T --user "$(id -u):$(id -g)" \
+    -v "$HOSTPWD/$DEST/seaweedfs-mirror:/backup" s3-client sync --quiet s3: /backup
+  tar -czf "$DEST/seaweedfs.tar.gz" -C "$DEST/seaweedfs-mirror" .
+  rm -rf "$DEST/seaweedfs-mirror"
 fi
 
 if want minio; then
