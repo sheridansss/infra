@@ -5,8 +5,9 @@
 #  - COMPOSE_PROFILES: без него активный набор сервисов пуст — up ничего бы
 #    не поднял. Дописывается ПРЕЖНИЙ состав (с minio, без seaweedfs), чтобы
 #    обновление не меняло набор сервисов уже работающего сервера.
-#  - SEAWEEDFS_*: обязательные переменные compose-файла (:?) — без них любой
-#    docker compose падает ещё на интерполяции, даже с выключенным seaweedfs.
+#  - SEAWEEDFS_* и GRAFANA_*: обязательные переменные compose-файла (:?) —
+#    без них любой docker compose падает ещё на интерполяции, даже когда
+#    сами сервисы выключены в профилях.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -30,4 +31,14 @@ if ! grep -q '^SEAWEEDFS_PASSWORD=' .env; then
     echo "SEAWEEDFS_PASSWORD=$(openssl rand -hex 16)"
   } >> .env
   echo "в .env добавлены SEAWEEDFS_USER и SEAWEEDFS_PASSWORD"
+fi
+
+if ! grep -q '^GRAFANA_PASSWORD=' .env; then
+  {
+    echo ''
+    echo '# Grafana — см. .env.example (добавлено автоматически при обновлении)'
+    echo 'GRAFANA_USER=admin'
+    echo "GRAFANA_PASSWORD=$(openssl rand -hex 16)"
+  } >> .env
+  echo "в .env добавлены GRAFANA_USER и GRAFANA_PASSWORD"
 fi

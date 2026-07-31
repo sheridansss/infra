@@ -38,8 +38,8 @@ jobs:
       - name: Сгенерировать .env
         run: |
           bash generate-env.sh
-          # CI тестирует всё, включая опциональный minio (по умолчанию выключен)
-          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,redis,rabbitmq,seaweedfs,minio,postgres,pgadmin/' .env
+          # CI тестирует всё, включая опциональные minio и monitoring
+          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,redis,rabbitmq,seaweedfs,minio,postgres,pgadmin,monitoring/' .env
 
       - name: Валидация compose-файла
         run: docker compose config --quiet
@@ -85,6 +85,24 @@ jobs:
 
           curl -fsS "http://127.0.0.1:${PGADMIN_PORT}/misc/ping" | grep PING
           echo "pgadmin: OK"
+
+          curl -fsS "http://127.0.0.1:${GRAFANA_PORT}/api/health" | jq -e '.database == "ok"' > /dev/null
+          # дашборд «Обзор стека» доехал через provisioning
+          curl -fsS -u "$GRAFANA_USER:$GRAFANA_PASSWORD" \
+            "http://127.0.0.1:${GRAFANA_PORT}/api/search?type=dash-db" | jq -e 'length >= 1' > /dev/null
+          # все таргеты prometheus должны перейти в up (экспортерам нужно
+          # несколько скрейп-циклов)
+          for _ in $(seq 1 24); do
+            DOWN=$(curl -fsS "http://127.0.0.1:${PROMETHEUS_PORT}/api/v1/targets" \
+              | jq -r '.data.activeTargets[] | select(.health != "up") | .labels.job' | xargs)
+            if [ -z "$DOWN" ]; then break; fi
+            sleep 5
+          done
+          if [ -n "$DOWN" ]; then echo "таргеты не в up: $DOWN"; exit 1; fi
+          UP=$(curl -fsS "http://127.0.0.1:${PROMETHEUS_PORT}/api/v1/targets" \
+            | jq '[.data.activeTargets[] | select(.health == "up")] | length')
+          test "$UP" -eq 8
+          echo "monitoring: OK ($UP таргетов up)"
 
       - name: Цикл аварии — бэкап, потеря данных, restore.sh
         run: |
@@ -153,15 +171,19 @@ jobs:
           # с одним профилем в списке активен ровно один сервис
           test "$(COMPOSE_PROFILES=redis docker compose config --services)" = "redis"
 
-          # страховка автодеплоя: старый .env (без COMPOSE_PROFILES и SEAWEEDFS_*)
-          # получает прежний состав сервисов и креды SeaweedFS. Пароль возвращаем,
-          # чтобы .env остался согласован с уже запущенным контейнером.
+          # страховка автодеплоя: старый .env (без COMPOSE_PROFILES, SEAWEEDFS_*,
+          # GRAFANA_*) получает прежний состав сервисов и недостающие креды.
+          # Пароли возвращаем, чтобы .env остался согласован с уже запущенными
+          # контейнерами.
           PW=$(sed -n 's/^SEAWEEDFS_PASSWORD=//p' .env)
-          sed -i '/^COMPOSE_PROFILES=/d; /^SEAWEEDFS_USER=/d; /^SEAWEEDFS_PASSWORD=/d' .env
+          GPW=$(sed -n 's/^GRAFANA_PASSWORD=//p' .env)
+          sed -i '/^COMPOSE_PROFILES=/d; /^SEAWEEDFS_USER=/d; /^SEAWEEDFS_PASSWORD=/d; /^GRAFANA_USER=/d; /^GRAFANA_PASSWORD=/d' .env
           bash deploy/ensure-env.sh
           grep -q '^COMPOSE_PROFILES=mongodb,redis,rabbitmq,minio,postgres,pgadmin$' .env
           grep -q '^SEAWEEDFS_PASSWORD=..*' .env
+          grep -q '^GRAFANA_PASSWORD=..*' .env
           sed -i "s/^SEAWEEDFS_PASSWORD=.*/SEAWEEDFS_PASSWORD=$PW/" .env
+          sed -i "s/^GRAFANA_PASSWORD=.*/GRAFANA_PASSWORD=$GPW/" .env
           test "$(docker compose config --services | sort | xargs)" = "minio mongo-keyfile mongodb pgadmin postgres rabbitmq redis"
 
           # реальное выключение: оставляем redis и postgres, apply-profiles
@@ -184,10 +206,11 @@ jobs:
           fi
 
           # вернуть полный состав — выключение обратимо
-          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,redis,rabbitmq,seaweedfs,minio,postgres,pgadmin/' .env
+          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,redis,rabbitmq,seaweedfs,minio,postgres,pgadmin,monitoring/' .env
           bash deploy/apply-profiles.sh
           docker compose ps --services | grep -qx minio
           docker compose ps --services | grep -qx seaweedfs
+          docker compose ps --services | grep -qx prometheus
           echo "профили: частичный состав, страховка и возврат — OK"
 
       - name: Диагностика при падении

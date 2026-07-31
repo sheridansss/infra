@@ -1,0 +1,12 @@
+# Дашборды провижнятся из monitoring/grafana/dashboards/ (примонтирован
+# в /etc/grafana/dashboards). Свои дашборды экспортируйте туда JSON-ом —
+# так они живут в git вместе со стеком.
+apiVersion: 1
+
+providers:
+  - name: infra
+    type: file
+    folder: ""
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards

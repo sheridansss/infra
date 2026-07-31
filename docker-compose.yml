@@ -124,6 +124,8 @@ services:
       - -ip=seaweedfs
       - -admin.user=${SEAWEEDFS_USER:?is not set, see .env.example}
       - -admin.password=${SEAWEEDFS_PASSWORD:?is not set, see .env.example}
+      # prometheus-метрики (порт только внутри docker-сети)
+      - -metricsPort=9327
     environment:
       # S3-креды: применяются при каждом старте (смена пароля = up -d seaweedfs)
       AWS_ACCESS_KEY_ID: ${SEAWEEDFS_USER}
@@ -232,6 +234,149 @@ services:
       retries: 5
       start_period: 30s
 
+  # --- Мониторинг: профиль monitoring (в состав по умолчанию НЕ входит,
+  # включается словом monitoring в COMPOSE_PROFILES — см. README). RabbitMQ
+  # (15692) и SeaweedFS (9327) отдают метрики нативно, экспортеры не нужны.
+  # Экспортер выключенной БД не падает — просто отдаёт up=0.
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=2GB
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  grafana:
+    image: grafana/grafana:13.1.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      # применяются при первой инициализации volume; дальше — через UI
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?is not set, see .env.example}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Метрики хоста. Смонтированный / — read-only, стандартная схема
+  # node-exporter (--path.rootfs); наружу порт не публикуется.
+  # kics-scan ignore-block
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:v1.12.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    command:
+      - --path.rootfs=/host
+    volumes:
+      # без rslave: Docker Desktop не поддерживает propagation для /,
+      # а для метрик CPU/RAM/диска она и не нужна
+      - /:/host:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9100/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  # Метрики контейнеров. docker.sock и системные каталоги — read-only,
+  # стандартная схема cAdvisor; наружу порт не публикуется.
+  # kics-scan ignore-block
+  cadvisor:
+    # git-теги cadvisor уходят вперёд, образы публикуются выборочно —
+    # пиновать только на реально существующий тег в gcr
+    image: gcr.io/cadvisor/cadvisor:v0.55.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - /:/rootfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # docker-фабрика cadvisor ходит через containerd — без этого сокета
+      # метрики будут без имён контейнеров
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.88.0-alpine
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      REDIS_ADDR: redis://redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9121/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_USER}?sslmode=disable
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:9187/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  # В образе нет shell — healthcheck невозможен; живость видна по таргету
+  # mongodb в Prometheus (up):
+  # kics-scan ignore-block
+  mongodb-exporter:
+    image: percona/mongodb_exporter:0.52.0
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    command: ["--collect-all", "--compatible-mode"]
+    environment:
+      MONGODB_URI: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/?directConnection=true
+    networks: [backend]
+
 networks:
   backend:
     # фиксированное имя, чтобы приложения из других compose-проектов
@@ -248,3 +393,5 @@ volumes:
   minio_data:
   pg_data:
   pgadmin_data:
+  prometheus_data:
+  grafana_data:
