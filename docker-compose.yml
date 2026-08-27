@@ -239,7 +239,7 @@ services:
   # (15692) и SeaweedFS (9327) отдают метрики нативно, экспортеры не нужны.
   # Экспортер выключенной БД не падает — просто отдаёт up=0.
   prometheus:
-    image: prom/prometheus:v3.13.2
+    image: prom/prometheus:v3.14.0
     profiles: ["monitoring"]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
