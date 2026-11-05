@@ -21,6 +21,13 @@ updates:
       # Dependabot считает «новее» — шум. Следующий мажор возьмём руками.
       - dependency-name: dpage/pgadmin4
 
+  # Следим за официальной базой временного PostgreSQL-образа: после исправления
+  # Brotli в upstream можно вернуть Compose на официальный образ (см. рецепт).
+  - package-ecosystem: docker
+    directory: /images/postgres
+    schedule:
+      interval: weekly
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

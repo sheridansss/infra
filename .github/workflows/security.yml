@@ -65,6 +65,12 @@ jobs:
           done
           exit "$FAILED"
 
+      - name: Проверить рецепт PostgreSQL
+        if: ${{ !cancelled() }}
+        run: |
+          docker build --pull --tag infra-postgres:ci images/postgres
+          trivy image --severity CRITICAL --ignore-unfixed --exit-code 1 --quiet infra-postgres:ci
+
   misconfig:
     runs-on: ubuntu-latest
     timeout-minutes: 10
