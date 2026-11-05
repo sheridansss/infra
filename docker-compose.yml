@@ -376,7 +376,7 @@ services:
   # mongodb в Prometheus (up):
   # kics-scan ignore-block
   mongodb-exporter:
-    image: percona/mongodb_exporter:0.52.0
+    image: percona/mongodb_exporter:0.54.0
     profiles: ["monitoring"]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
