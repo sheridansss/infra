@@ -165,9 +165,10 @@ services:
   minio:
     # ОПЦИЯ (в COMPOSE_PROFILES по умолчанию не входит): последний community-релиз
     # MinIO с полноценной веб-консолью — для приложений, ещё не переехавших на
-    # SeaweedFS. Новых community-образов не будет — проект заархивирован,
-    # тег пинован намеренно. Подробности в README.md.
-    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    # SeaweedFS. Проект заархивирован; новых community-образов не будет.
+    # Архивное зеркало исходного образа в GHCR (linux/amd64): Docker Hub
+    # больше не отдаёт minio/minio. Тег и digest пинованы намеренно, см. README.
+    image: ghcr.io/sheridansss/minio:RELEASE.2025-04-22T22-12-26Z@sha256:3f97c5651cb6662b880c787a232b6b34fec8d8922e08d6617b25d241a21164bb
     profiles: ["minio"]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]

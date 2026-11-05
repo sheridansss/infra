@@ -43,7 +43,7 @@ jobs:
           # по умолчанию профили (minio) и одноразовые инструменты (s3-client)
           for IMG in $(docker compose --profile '*' config --images | sort -u); do
             case "$IMG" in
-              minio/minio:*)
+              minio/minio:*|ghcr.io/sheridansss/minio:*)
                 echo "::group::$IMG — EOL, пинован сознательно, отчёт информационный"
                 trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 "$IMG"
                 echo "::endgroup::"
