@@ -30,7 +30,9 @@ jobs:
           if ($r | Where-Object Severity -eq 'Error') { exit 1 }
 
   smoke:
-    runs-on: ubuntu-latest
+    # MongoDB 8.0 ошибочно блокирует ядро 7.0.0 у Ubuntu (SERVER-136848).
+    # У runners 24.04/26.04 уже это ядро; временно используем 22.04 с ядром 6.8.
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -45,7 +47,9 @@ jobs:
         run: docker compose config --quiet
 
       - name: Поднять стек и дождаться healthy
-        run: docker compose up -d --wait --quiet-pull
+        run: |
+          uname -r
+          docker compose up -d --wait --quiet-pull
 
       - name: Смоук-тесты всех сервисов
         run: |

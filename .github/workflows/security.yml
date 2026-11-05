@@ -42,21 +42,26 @@ jobs:
           # --profile '*': сканируем ВСЕ описанные образы, включая выключенные
           # по умолчанию профили (minio) и одноразовые инструменты (s3-client)
           for IMG in $(docker compose --profile '*' config --images | sort -u); do
+            BLOCK_CRITICAL=1
             case "$IMG" in
               minio/minio:*|ghcr.io/sheridansss/minio:*)
+                BLOCK_CRITICAL=0
                 echo "::group::$IMG — EOL, пинован сознательно, отчёт информационный"
-                trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 "$IMG"
-                echo "::endgroup::"
                 ;;
               *)
                 echo "::group::$IMG"
-                trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 "$IMG"
-                # гейт отдельным быстрым проходом (БД и слои уже в кеше)
-                trivy image --severity CRITICAL --ignore-unfixed --exit-code 1 --quiet "$IMG" \
-                  || { FAILED=1; echo "::error::CRITICAL с доступным фиксом в $IMG — детали в логе выше"; }
-                echo "::endgroup::"
                 ;;
             esac
+            # Ошибка скачивания/скана тоже валит job, но не скрывает остальные образы.
+            if ! trivy image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 "$IMG"; then
+              FAILED=1
+              echo "::error::Не удалось просканировать $IMG — проверка неполная"
+            elif [ "$BLOCK_CRITICAL" -eq 1 ]; then
+              # гейт отдельным быстрым проходом (БД и слои уже в кеше)
+              trivy image --severity CRITICAL --ignore-unfixed --exit-code 1 --quiet "$IMG" \
+                || { FAILED=1; echo "::error::Проверка CRITICAL не пройдена для $IMG — детали в логе выше"; }
+            fi
+            echo "::endgroup::"
           done
           exit "$FAILED"
 

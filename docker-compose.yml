@@ -112,7 +112,7 @@ services:
   seaweedfs:
     # Объектное S3-хранилище по умолчанию (см. README, «Объектное хранилище»).
     # Режим mini: master + volume + filer + S3 + веб-админка в одном процессе.
-    image: chrislusf/seaweedfs:4.40
+    image: chrislusf/seaweedfs:4.52
     profiles: ["seaweedfs"]
     # стабильный идентификатор узла вместо меняющегося IP контейнера
     hostname: seaweedfs
@@ -126,6 +126,8 @@ services:
       - -admin.password=${SEAWEEDFS_PASSWORD:?is not set, see .env.example}
       # prometheus-метрики (порт только внутри docker-сети)
       - -metricsPort=9327
+      # в новых релизах телеметрия включена по умолчанию
+      - -master.telemetry=false
     environment:
       # S3-креды: применяются при каждом старте (смена пароля = up -d seaweedfs)
       AWS_ACCESS_KEY_ID: ${SEAWEEDFS_USER}
@@ -148,7 +150,7 @@ services:
   # Разовому контейнеру healthcheck не нужен:
   # kics-scan ignore-block
   s3-client:
-    image: ghcr.io/rclone/rclone:1.74
+    image: ghcr.io/rclone/rclone:1.75.2
     profiles: ["tools"]
     restart: "no"
     security_opt: ["no-new-privileges:true"]
@@ -262,7 +264,7 @@ services:
       start_period: 15s
 
   grafana:
-    image: grafana/grafana:13.1.1
+    image: grafana/grafana:13.3.0
     profiles: ["monitoring"]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
