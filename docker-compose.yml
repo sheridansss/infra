@@ -12,7 +12,7 @@ services:
   # Одноразовому контейнеру healthcheck не нужен:
   # kics-scan ignore-block
   mongo-keyfile:
-    image: mongo:8.0
+    image: mongo:9.0
     # зависимость mongodb — включается и выключается вместе с ним
     profiles: ["mongodb"]
     restart: "no"
@@ -31,7 +31,7 @@ services:
     networks: [backend]
 
   mongodb:
-    image: mongo:8.0
+    image: mongo:9.0
     profiles: ["mongodb"]
     # стабильный hostname: он прописан в конфиге replica set (host: mongodb:27017)
     hostname: mongodb
