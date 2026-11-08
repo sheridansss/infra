@@ -202,7 +202,7 @@ services:
   # Разовому контейнеру healthcheck не нужен:
   # kics-scan ignore-block
   s3-client:
-    image: ghcr.io/rclone/rclone:1.75.2
+    image: ghcr.io/rclone/rclone:1.76.0
     profiles: ["tools"]
     restart: "no"
     security_opt: ["no-new-privileges:true"]
