@@ -5,7 +5,7 @@
 #   bash restore.sh latest                          # весь стек из свежайшей копии
 #   bash restore.sh backup/2026-07-30_232627 redis  # один сервис из конкретной
 # Что делает по сервисам:
-#   mongodb   — mongorestore --drop --oplogReplay (коллекции заменяются)
+#   mongodb / mongodb9 — mongorestore --drop --oplogReplay (коллекции заменяются)
 #   postgres  — пересоздаёт кластер (volume) и заливает pg_dumpall
 #   redis     — подкладывает RDB-снапшот через одноразовый сервер без AOF
 #   rabbitmq  — rabbitmqctl import_definitions поверх текущих
@@ -19,7 +19,7 @@ export MSYS_NO_PATHCONV=1
 
 cd "$(dirname "$0")"
 
-ALL_SERVICES=(mongodb postgres redis rabbitmq seaweedfs minio)
+ALL_SERVICES=(mongodb mongodb9 postgres redis rabbitmq seaweedfs minio)
 
 # Включённые сервисы: состав стека задаёт COMPOSE_PROFILES в .env.
 ENABLED_LIST="$(docker compose config --services)"
@@ -45,7 +45,7 @@ SERVICES=()
 for ARG in "$@"; do
   case "$ARG" in
     --yes) YES=1 ;;
-    mongodb | postgres | redis | rabbitmq | seaweedfs | minio) SERVICES+=("$ARG") ;;
+    mongodb | mongodb9 | postgres | redis | rabbitmq | seaweedfs | minio) SERVICES+=("$ARG") ;;
     *)
       echo "неизвестный аргумент: $ARG" >&2
       usage
@@ -81,6 +81,7 @@ fi
 # Комплектность каталога — до первого разрушающего действия.
 declare -A FILE=(
   [mongodb]=mongodb.archive.gz
+  [mongodb9]=mongodb9.archive.gz
   [postgres]=postgres.sql.gz
   [redis]=redis.rdb
   [rabbitmq]=rabbitmq-definitions.json
@@ -119,13 +120,17 @@ if [ "$YES" != 1 ]; then
   esac
 fi
 
-restore_mongodb() {
-  echo "--- mongodb: mongorestore --drop --oplogReplay..."
-  docker compose exec -T mongodb sh -c \
+restore_mongo() {
+  local SVC="$1"
+  echo "--- $SVC: mongorestore --drop --oplogReplay..."
+  docker compose exec -T "$SVC" sh -c \
     'mongorestore -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" \
        --authenticationDatabase admin --archive --gzip --drop --oplogReplay' \
-    < "$SRC/mongodb.archive.gz"
+    < "$SRC/${FILE[$SVC]}"
 }
+
+restore_mongodb() { restore_mongo mongodb; }
+restore_mongodb9() { restore_mongo mongodb9; }
 
 restore_postgres() {
   echo "--- postgres: пересоздание кластера из pg_dumpall..."

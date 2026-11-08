@@ -21,6 +21,49 @@ jobs:
       - name: shellcheck
         run: shellcheck generate-env.sh backup.sh backup-cold.sh backup-sync.sh restore.sh deploy/*.sh
 
+      - name: Генерация и обновление .env
+        run: |
+          FIXTURE=$(mktemp -d)
+          trap 'rm -rf "$FIXTURE"' EXIT
+          mkdir -p "$FIXTURE/deploy"
+          cp .env.example generate-env.sh "$FIXTURE/"
+          cp deploy/ensure-env.sh "$FIXTURE/deploy/"
+          cd "$FIXTURE"
+          bash generate-env.sh
+          grep -Eq '^MONGO9_ROOT_PASSWORD=[0-9a-f]{32}$' .env
+          if grep '^COMPOSE_PROFILES=' .env | grep -q mongodb9; then exit 1; fi
+
+          # Старый .env: новые ключи добавляются, прежние значения сохраняются.
+          sed -i '/^MONGO9_/d' .env
+          grep -E '^[A-Z0-9_]+=' .env > existing.env
+          bash deploy/ensure-env.sh
+          grep -E '^[A-Z0-9_]+=' .env | grep -v '^MONGO9_' > preserved.env
+          cmp existing.env preserved.env
+          grep -Eq '^MONGO9_ROOT_PASSWORD=[0-9a-f]{32}$' .env
+          grep -qx 'MONGO9_ROOT_USER=root' .env
+          grep -qx 'MONGO9_PORT=27018' .env
+
+          # Частичный блок с пользовательскими значениями дополняется отдельно.
+          sed -i 's/^MONGO9_ROOT_USER=.*/MONGO9_ROOT_USER=custom9/; s/^MONGO9_PORT=.*/MONGO9_PORT=37018/; /^MONGO9_ROOT_PASSWORD=/d' .env
+          bash deploy/ensure-env.sh
+          grep -qx 'MONGO9_ROOT_USER=custom9' .env
+          grep -qx 'MONGO9_PORT=37018' .env
+          grep -Eq '^MONGO9_ROOT_PASSWORD=[0-9a-f]{32}$' .env
+          cp .env completed.env
+          bash deploy/ensure-env.sh
+          cmp completed.env .env
+
+      - name: Генерация .env в PowerShell
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'mongodb9-env-powershell'
+          New-Item -ItemType Directory -Path $fixture | Out-Null
+          Copy-Item .env.example, generate-env.ps1 -Destination $fixture
+          & (Join-Path $fixture 'generate-env.ps1')
+          $content = Get-Content (Join-Path $fixture '.env') -Raw
+          if ($content -notmatch '(?m)^MONGO9_ROOT_PASSWORD=[0-9a-f]{32}\r?$') { throw 'MongoDB 9 password was not generated' }
+          if ($content -match '(?m)^COMPOSE_PROFILES=.*mongodb9') { throw 'MongoDB 9 must be optional' }
+
       - name: PSScriptAnalyzer generate-env.ps1
         shell: pwsh
         run: |
@@ -40,11 +83,19 @@ jobs:
       - name: Сгенерировать .env
         run: |
           bash generate-env.sh
-          # CI тестирует всё, включая опциональные minio и monitoring
-          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,redis,rabbitmq,seaweedfs,minio,postgres,pgadmin,monitoring/' .env
+          # CI тестирует всё, включая опциональные mongodb9, minio и monitoring
+          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,mongodb9,redis,rabbitmq,seaweedfs,minio,postgres,pgadmin,monitoring/' .env
 
       - name: Валидация compose-файла
-        run: docker compose config --quiet
+        run: |
+          docker compose config --quiet
+          test "$(COMPOSE_PROFILES=mongodb docker compose config --services | sort | xargs)" = "mongo-keyfile mongodb"
+          test "$(COMPOSE_PROFILES=mongodb9 docker compose config --services | sort | xargs)" = "mongo9-keyfile mongodb9"
+          test "$(COMPOSE_PROFILES=mongodb,mongodb9 docker compose config --services | sort | xargs)" = "mongo-keyfile mongo9-keyfile mongodb mongodb9"
+          test "$(COMPOSE_PROFILES=redis docker compose config --services)" = "redis"
+          if COMPOSE_PROFILES=monitoring docker compose config --services | grep -qx mongodb9; then
+            echo "monitoring не должен включать MongoDB 9"; exit 1
+          fi
 
       - name: Поднять стек и дождаться healthy
         run: |
@@ -58,12 +109,26 @@ jobs:
           docker compose exec -T mongodb mongosh -u "$MONGO_ROOT_USER" -p "$MONGO_ROOT_PASSWORD" \
             --authenticationDatabase admin --quiet --eval '
               const st = rs.status();
-              if (st.members[0].stateStr != "PRIMARY") throw new Error("mongo is not PRIMARY");
+              if (st.set != "rs0" || st.members[0].stateStr != "PRIMARY") throw new Error("rs0 is not PRIMARY");
+              if (!db.version().startsWith("8.0.")) throw new Error("expected MongoDB 8.0");
               const s = db.getMongo().startSession();
               const col = s.getDatabase("smoke").t;
               s.startTransaction(); col.insertOne({ok: 1}); s.commitTransaction();
               db.getSiblingDB("smoke").dropDatabase();
               print("mongo: replica set + transaction OK");
+            '
+
+          docker compose exec -T mongodb9 mongosh -u "$MONGO9_ROOT_USER" -p "$MONGO9_ROOT_PASSWORD" \
+            --authenticationDatabase admin --quiet --eval '
+              const st = rs.status();
+              if (st.set != "rs9" || st.members[0].stateStr != "PRIMARY") throw new Error("rs9 is not PRIMARY");
+              if (!db.version().startsWith("9.0.")) throw new Error("expected MongoDB 9.0");
+              if (db.adminCommand({getParameter: 1, featureCompatibilityVersion: 1}).featureCompatibilityVersion.version != "9.0") throw new Error("expected FCV 9.0");
+              const s = db.getMongo().startSession();
+              const col = s.getDatabase("smoke").t;
+              s.startTransaction(); col.insertOne({ok: 9}); s.commitTransaction();
+              db.getSiblingDB("smoke").dropDatabase();
+              print("mongodb9: replica set + transaction OK");
             '
 
           docker compose exec -T redis sh -c 'redis-cli set smoke 42 | grep OK && redis-cli get smoke | grep 42 && redis-cli del smoke > /dev/null'
@@ -105,13 +170,14 @@ jobs:
           if [ -n "$DOWN" ]; then echo "таргеты не в up: $DOWN"; exit 1; fi
           UP=$(curl -fsS "http://127.0.0.1:${PROMETHEUS_PORT}/api/v1/targets" \
             | jq '[.data.activeTargets[] | select(.health == "up")] | length')
-          test "$UP" -eq 8
+          test "$UP" -eq 9
           echo "monitoring: OK ($UP таргетов up)"
 
       - name: Цикл аварии — бэкап, потеря данных, restore.sh
         run: |
           # маркерные данные в каждом сервисе
           docker compose exec -T mongodb sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "db.getSiblingDB(\"drtest\").t.insertOne({probe: 777})"' > /dev/null
+          docker compose exec -T mongodb9 sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "db.getSiblingDB(\"drtest\").t.insertOne({probe: 999})"' > /dev/null
           docker compose exec -T postgres sh -c 'psql -q -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE drtest" && psql -q -U "$POSTGRES_USER" -d drtest -c "CREATE TABLE probe(v int); INSERT INTO probe VALUES (777)"'
           docker compose exec -T redis redis-cli set dr:probe 777 > /dev/null
           docker compose exec -T rabbitmq rabbitmqctl -q add_user dr_probe secret777
@@ -121,22 +187,41 @@ jobs:
 
           bash backup.sh
           LATEST=$(printf '%s\n' backup/????-??-??_?????? | tail -n 1)
-          for f in mongodb.archive.gz postgres.sql.gz redis.rdb rabbitmq-definitions.json seaweedfs.tar.gz minio.tar.gz manifest.txt; do
+          for f in mongodb.archive.gz mongodb9.archive.gz postgres.sql.gz redis.rdb rabbitmq-definitions.json seaweedfs.tar.gz minio.tar.gz manifest.txt; do
             [ -s "$LATEST/$f" ] || { echo "отсутствует или пуст: $LATEST/$f"; exit 1; }
           done
 
           # "авария": уничтожаем маркеры
           docker compose exec -T mongodb sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "db.getSiblingDB(\"drtest\").dropDatabase()"' > /dev/null
+          docker compose exec -T mongodb9 sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "db.getSiblingDB(\"drtest\").dropDatabase()"' > /dev/null
           docker compose exec -T postgres sh -c 'psql -q -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE drtest"'
           docker compose exec -T redis redis-cli del dr:probe > /dev/null
           docker compose exec -T rabbitmq rabbitmqctl -q delete_user dr_probe
           docker compose exec -T minio sh -c 'mc rb --force local/drtest' > /dev/null
           docker compose --profile tools run --rm -T s3-client purge s3:drtest
 
+          # Старый бэкап без MongoDB 9: полный restore должен отказать ДО записи в MongoDB 8.
+          mv "$LATEST/mongodb9.archive.gz" "$LATEST/mongodb9.archive.gz.saved"
+          if bash restore.sh latest --yes; then
+            echo "restore.sh должен отказываться от неполного бэкапа"; exit 1
+          fi
+          docker compose exec -T mongodb sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "if (db.getSiblingDB(\"drtest\").t.countDocuments({}) != 0) throw new Error(\"incomplete backup changed MongoDB 8\")"'
+          bash restore.sh latest --yes mongodb
+          docker compose exec -T mongodb sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "if (db.getSiblingDB(\"drtest\").t.findOne().probe != 777) throw new Error(\"legacy MongoDB 8 restore failed\")"'
+          docker compose exec -T mongodb9 sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "if (db.getSiblingDB(\"drtest\").t.countDocuments({}) != 0) throw new Error(\"MongoDB 8 restore changed MongoDB 9\")"'
+          mv "$LATEST/mongodb9.archive.gz.saved" "$LATEST/mongodb9.archive.gz"
+
+          # Адресный restore MongoDB 9 не должен менять данные MongoDB 8.
+          docker compose exec -T mongodb sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "db.getSiblingDB(\"drtest\").t.updateOne({}, {\$set: {probe: 888}})"'
+          bash restore.sh latest --yes mongodb9
+          docker compose exec -T mongodb sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "if (db.getSiblingDB(\"drtest\").t.findOne().probe != 888) throw new Error(\"MongoDB 9 restore changed MongoDB 8\")"'
+          docker compose exec -T mongodb9 sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "if (db.getSiblingDB(\"drtest\").t.findOne().probe != 999) throw new Error(\"MongoDB 9 restore failed\")"'
+
           bash restore.sh latest --yes
 
           # всё должно вернуться
           docker compose exec -T mongodb sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "const v = db.getSiblingDB(\"drtest\").t.findOne().probe; if (v != 777) throw new Error(\"mongo: \" + v)"'
+          docker compose exec -T mongodb9 sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "const v = db.getSiblingDB(\"drtest\").t.findOne().probe; if (v != 999) throw new Error(\"mongodb9: \" + v)"'
           docker compose exec -T postgres sh -c 'psql -t -A -U "$POSTGRES_USER" -d drtest -c "SELECT v FROM probe"' | grep -qx 777
           docker compose exec -T redis redis-cli get dr:probe | grep -q 777
           docker compose exec -T rabbitmq rabbitmqctl -q list_users | grep -q dr_probe
@@ -196,6 +281,7 @@ jobs:
           bash deploy/apply-profiles.sh
           test "$(docker compose ps -a --services | sort | xargs)" = "postgres redis"
           docker volume inspect services_minio_data > /dev/null
+          docker volume inspect services_mongo_data services_mongo9_data services_mongo9_config services_mongo9_keyfile > /dev/null
 
           # бэкап и restore работают только с включённым набором
           bash backup.sh
@@ -203,18 +289,23 @@ jobs:
           test -s "$LATEST/redis.rdb"
           test -s "$LATEST/postgres.sql.gz"
           test ! -e "$LATEST/minio.tar.gz"
+          test ! -e "$LATEST/mongodb9.archive.gz"
           grep -q '^services: postgres redis$' "$LATEST/manifest.txt"
           bash restore.sh latest --yes
           if bash restore.sh latest --yes minio; then
             echo "restore.sh должен отказываться восстанавливать выключенный сервис"; exit 1
           fi
+          if bash restore.sh latest --yes mongodb9; then
+            echo "restore.sh должен отказываться восстанавливать выключенную MongoDB 9"; exit 1
+          fi
 
           # вернуть полный состав — выключение обратимо
-          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,redis,rabbitmq,seaweedfs,minio,postgres,pgadmin,monitoring/' .env
+          sed -i 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=mongodb,mongodb9,redis,rabbitmq,seaweedfs,minio,postgres,pgadmin,monitoring/' .env
           bash deploy/apply-profiles.sh
           docker compose ps --services | grep -qx minio
           docker compose ps --services | grep -qx seaweedfs
           docker compose ps --services | grep -qx prometheus
+          docker compose exec -T mongodb9 sh -c 'mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --quiet --eval "if (db.getSiblingDB(\"drtest\").t.findOne().probe != 999) throw new Error(\"MongoDB 9 data lost after profile toggle\")"'
           echo "профили: частичный состав, страховка и возврат — OK"
 
       - name: Диагностика при падении
