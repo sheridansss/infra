@@ -5,7 +5,7 @@
 #  - COMPOSE_PROFILES: без него активный набор сервисов пуст — up ничего бы
 #    не поднял. Дописывается ПРЕЖНИЙ состав (с minio, без seaweedfs), чтобы
 #    обновление не меняло набор сервисов уже работающего сервера.
-#  - SEAWEEDFS_* и GRAFANA_*: обязательные переменные compose-файла (:?) —
+#  - SEAWEEDFS_*, GRAFANA_* и MONGO9_*: обязательные переменные compose-файла (:?) —
 #    без них любой docker compose падает ещё на интерполяции, даже когда
 #    сами сервисы выключены в профилях.
 set -euo pipefail
@@ -41,4 +41,19 @@ if ! grep -q '^GRAFANA_PASSWORD=' .env; then
     echo "GRAFANA_PASSWORD=$(openssl rand -hex 16)"
   } >> .env
   echo "в .env добавлены GRAFANA_USER и GRAFANA_PASSWORD"
+fi
+
+# Ключи проверяем отдельно: частично заполненный блок MongoDB 9 дополняем,
+# сохраняя уже заданные значения. Сам профиль автоматически не включаем.
+if ! grep -q '^MONGO9_ROOT_USER=' .env; then
+  printf '\nMONGO9_ROOT_USER=root\n' >> .env
+  echo "в .env добавлен MONGO9_ROOT_USER"
+fi
+if ! grep -q '^MONGO9_ROOT_PASSWORD=' .env; then
+  printf '\nMONGO9_ROOT_PASSWORD=%s\n' "$(openssl rand -hex 16)" >> .env
+  echo "в .env добавлен MONGO9_ROOT_PASSWORD"
+fi
+if ! grep -q '^MONGO9_PORT=' .env; then
+  printf '\nMONGO9_PORT=27018\n' >> .env
+  echo "в .env добавлен MONGO9_PORT"
 fi

@@ -11,11 +11,10 @@ updates:
       # Архивное зеркало MinIO в GHCR: исходный релиз с полноценной веб-консолью
       # закреплён тегом и digest. См. README, «Объектное хранилище».
       - dependency-name: sheridansss/minio
-      # Едем по major-линейке MongoDB (5 лет поддержки). Minor-релизы (8.2, 8.3)
-      # нельзя пропускать при апгрейдах — это обязательство обновляться каждый
-      # квартал, не для нашего стека. Предлагать только следующий major.
+      # MongoDB 8.0 и 9.0 работают отдельными профилями. Переходы между
+      # major/minor-линиями делаем вручную; патчи получаем через compose pull.
       - dependency-name: mongo
-        update-types: ["version-update:semver-minor"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       # Плаваем на мажорном теге 9 (минорные приезжают через compose pull).
       # У образа есть датированные snapshot-теги (2026-06-16-1), которые
       # Dependabot считает «новее» — шум. Следующий мажор возьмём руками.

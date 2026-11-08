@@ -1,6 +1,6 @@
 # Инфраструктурный стек
 
-Один compose-файл поднимает: **MongoDB 8.0**, **Redis 8**, **RabbitMQ 4** (с management-UI), **SeaweedFS** (S3-хранилище), **PostgreSQL 18** и **pgAdmin 4**; опционально — **MinIO** (см. «Объектное хранилище»). Все пароли и порты — в `.env`.
+Один compose-файл поднимает: **MongoDB 8.0**, **Redis 8**, **RabbitMQ 4** (с management-UI), **SeaweedFS** (S3-хранилище), **PostgreSQL 18** и **pgAdmin 4**; опционально — независимую **MongoDB 9.0** и **MinIO** (см. «Объектное хранилище»). Все пароли и порты — в `.env`.
 
 ## Запуск
 
@@ -20,6 +20,7 @@ docker compose ps         # дождаться статуса healthy у все�
 | Сервис        | Порт  | Подключение                                  |
 | ------------- | ----- | -------------------------------------------- |
 | MongoDB       | 27017 | `mongodb://root:<пароль>@<host>:27017/?authSource=admin&directConnection=true` |
+| MongoDB 9 (профиль mongodb9) | 27018 | `mongodb://root:<MONGO9_ROOT_PASSWORD>@<host>:27018/?authSource=admin&directConnection=true` |
 | Redis         | 6379  | `redis://:<пароль>@<host>:6379/0`            |
 | RabbitMQ AMQP | 5672  | `amqp://admin:<пароль>@<host>:5672/`         |
 | RabbitMQ UI   | 15672 | `http://<host>:15672`                        |
@@ -45,9 +46,28 @@ bash deploy/apply-profiles.sh   # остановит выключенное, п�
 
 В `.env`, созданном до появления этой настройки, переменной нет, а без неё активный набор пуст. Автодеплой дописывает недостающие переменные сам (`deploy/ensure-env.sh` — прежний состав сервисов и недостающие креды); при ручном обновлении возьмите строки из `.env.example`.
 
+## MongoDB 9 (опционально)
+
+Основная MongoDB 8.0 остаётся в профиле `mongodb` (сервис `mongodb`, replica set `rs0`). Для MongoDB 9.0 добавьте `mongodb9` в `COMPOSE_PROFILES`:
+
+```bash
+# Для старого .env: добавить отсутствующие MONGO9_* без смены существующих значений
+bash deploy/ensure-env.sh
+# в .env: COMPOSE_PROFILES=mongodb,mongodb9,redis,rabbitmq,seaweedfs,postgres,pgadmin
+bash deploy/apply-profiles.sh
+```
+
+Сервис `mongodb9` использует replica set `rs9`, отдельные тома `mongo9_data`, `mongo9_config`, `mongo9_keyfile` и учётные данные `MONGO9_ROOT_USER` / `MONGO9_ROOT_PASSWORD`. Снаружи доступен порт `MONGO9_PORT` (по умолчанию `27018`), внутри сети — `mongodb9:27017`:
+
+```text
+mongodb://root:<MONGO9_ROOT_PASSWORD>@mongodb9:27017/?replicaSet=rs9&authSource=admin
+```
+
+Можно оставить только `mongodb9`, убрав `mongodb` из списка профилей. Новая база создаётся пустой со штатным FCV MongoDB 9; перенос данных и переключение приложений выполняются отдельно. Каждая версия хранит собственные данные и бэкапы. После выключения профиля его тома сохраняются.
+
 ## Мониторинг (опционально)
 
-Профиль `monitoring` поднимает Prometheus + Grafana с экспортерами: node-exporter (CPU/RAM/диск/сеть хоста), cAdvisor (метрики каждого контейнера), redis/postgres/mongodb-экспортеры; RabbitMQ и SeaweedFS отдают метрики нативно. В состав по умолчанию не входит — это ещё ~0.5–0.7 ГБ RAM. Включить:
+Профиль `monitoring` поднимает Prometheus + Grafana с экспортерами: node-exporter (CPU/RAM/диск/сеть хоста), cAdvisor (метрики каждого контейнера), redis/postgres/mongodb-экспортеры; MongoDB 9 имеет отдельный `mongodb9-exporter` и цель `mongodb9`. RabbitMQ и SeaweedFS отдают метрики нативно. В состав по умолчанию не входит — это ещё ~0.5–0.7 ГБ RAM. Включить:
 
 ```bash
 # в .env: добавить monitoring в COMPOSE_PROFILES
@@ -55,7 +75,7 @@ bash deploy/apply-profiles.sh
 ```
 
 - **Grafana** — `http://<host>:3000`. Дашборд «Обзор стека» (статусы таргетов, хост, контейнеры) провижнится из `monitoring/grafana/dashboards/` автоматически; свои дашборды экспортируйте туда же JSON-ом — они попадут в git и на все серверы. Готовые дашборды сообщества (Dashboards → New → Import, по ID): 1860 — Node Exporter Full, 14282 — cAdvisor, 763 — Redis, 9628 — PostgreSQL, 2583 — MongoDB, 10991 — RabbitMQ.
-- **Prometheus** — `http://<host>:9090`, Status → Target health: все цели должны быть `up` (таргет выключенного в профилях сервиса будет `down` — это ожидаемо). Хранение: 15 дней, максимум 2 ГБ.
+- **Prometheus** — `http://<host>:9090`, Status → Target health: все цели должны быть `up` (таргет выключенного в профилях сервиса будет `down` — это ожидаемо). Мониторинг сам не включает `mongodb9`; для работающей цели `mongodb9` нужны оба профиля, `mongodb9` и `monitoring`. Хранение: 15 дней, максимум 2 ГБ.
 - Экспортеры наружу не публикуются (только внутри docker-сети). Метрики в онлайн-бэкап не входят (эфемерные данные); volumes Prometheus и Grafana попадают в `backup-cold.sh` как и все остальные.
 
 ## Доступ снаружи
@@ -79,7 +99,7 @@ networks:
     external: true
 ```
 
-Внутри сети сервисы доступны по именам сервисов: `mongodb:27017`, `redis:6379`, `rabbitmq:5672`, `seaweedfs:8333`, `postgres:5432` (и `minio:9000`, если включён). Команды внутри контейнера: `docker compose exec <service> ...`.
+Внутри сети сервисы доступны по именам сервисов: `mongodb:27017`, `redis:6379`, `rabbitmq:5672`, `seaweedfs:8333`, `postgres:5432` (а также `mongodb9:27017` и `minio:9000`, если включены). Команды внутри контейнера: `docker compose exec <service> ...`.
 
 MongoDB изнутри сети подключайте с указанием replica set:
 
@@ -148,9 +168,13 @@ BACKUP_REMOTE=/mnt/nas/infra            # rsync в примонтированн�
 ```bash
 bash restore.sh latest                                 # весь стек из свежайшей копии
 bash restore.sh backup/2026-07-30_233443 redis postgres  # выборочно, из конкретной
+bash restore.sh latest mongodb9                       # только MongoDB 9
+bash restore.sh backup/2026-07-30_233443 mongodb        # MongoDB 8 из старой копии
 ```
 
-По сервисам: MongoDB — `mongorestore --drop --oplogReplay` (коллекции заменяются); PostgreSQL — пересоздание кластера (volume) и загрузка `pg_dumpall` (сообщение `role "postgres" already exists` — норма); Redis — загрузка RDB-снапшота одноразовым сервером без AOF с последующим включением AOF (при включённом AOF Redis игнорирует `dump.rdb`, даже когда AOF-файлов нет); RabbitMQ — `rabbitmqctl import_definitions` поверх текущих; SeaweedFS — `rclone copy` поверх текущих; MinIO — `mc mirror --overwrite` поверх текущих.
+По сервисам: MongoDB 8 и 9 — `mongorestore --drop --oplogReplay` (коллекции заменяются); PostgreSQL — пересоздание кластера (volume) и загрузка `pg_dumpall` (сообщение `role "postgres" already exists` — норма); Redis — загрузка RDB-снапшота одноразовым сервером без AOF с последующим включением AOF (при включённом AOF Redis игнорирует `dump.rdb`, даже когда AOF-файлов нет); RabbitMQ — `rabbitmqctl import_definitions` поверх текущих; SeaweedFS — `rclone copy` поверх текущих; MinIO — `mc mirror --overwrite` поверх текущих.
+
+Архивы MongoDB раздельные: `mongodb.archive.gz` для сервиса `mongodb` и `mongodb9.archive.gz` для `mongodb9`. Каждый создаётся и восстанавливается инструментами своей версии. Если в старом бэкапе нет MongoDB 9, укажите восстанавливаемые сервисы явно: без списка `restore.sh` требует архивы всех включённых сервисов и при неполной копии завершается до изменения данных. Восстановление бэкапа выполняется в соответствующий сервис; для переноса между версиями нужна отдельная процедура.
 
 Этот же цикл «бэкап → потеря данных → restore.sh → проверка» CI гоняет на каждом коммите.
 
@@ -180,6 +204,8 @@ PostgreSQL использует сборку на базе официально�
 - **Скан секретов** в файлах репозитория — тем же workflow; страховка к `.gitignore`, репозиторий публичный.
 - **Misconfig-скан** (KICS) — проверки docker-compose и workflows, гейт по HIGH/MEDIUM. Осознанные исключения с обоснованиями — в `security.yml`; по его находке контейнеры получили `no-new-privileges`.
 - **Dependabot** (`dependabot.yml`) — еженедельные PR с новыми тегами образов (кроме пинованного MinIO) и версиями actions. Каждый такой PR автоматически прогоняет полный CI — смоук, DR-цикл и сканы, — так что обновление приходит проверенным.
+
+MongoDB закреплена на линиях `8.0` и `9.0`: переходы на другую major/minor-линию рассматриваются вручную, Dependabot их не предлагает. Патчи внутри линий загружаются обычным `docker compose pull`.
 
 ## Объектное хранилище: SeaweedFS и MinIO (опция)
 
@@ -214,7 +240,7 @@ docker compose down -v               # УДАЛИТ и данные
 
 ## Нюансы
 
-- **MongoDB**: работает как single-node replica set `rs0` — транзакции и change streams доступны. keyFile для внутренней аутентификации генерируется автоматически (сервис `mongo-keyfile`), инициация набора происходит в healthcheck при первом запуске. Изнутри docker-сети подключайтесь с `?replicaSet=rs0`, снаружи (через проброшенный порт) — с `?directConnection=true`, иначе драйвер после discovery пойдёт на `mongodb:27017` из конфига набора и не достучится.
+- **MongoDB**: обе версии работают как независимые single-node replica set — `rs0` для 8.0 и `rs9` для 9.0; транзакции и change streams доступны. keyFile генерируются автоматически отдельными сервисами `mongo-keyfile` и `mongo9-keyfile`, инициация наборов происходит в healthcheck при первом запуске. Изнутри docker-сети подключайтесь с `?replicaSet=rs0` или `?replicaSet=rs9`, снаружи (через проброшенный порт) — с `?directConnection=true`, иначе драйвер после discovery пойдёт на внутреннее имя из конфига набора и не достучится.
 - **Redis**: включён AOF (`--appendonly yes`). Лимит памяти не задан — при необходимости добавьте `--maxmemory 512mb --maxmemory-policy allkeys-lru` в `command`.
 - **SeaweedFS**: подключение S3 SDK — endpoint `http://seaweedfs:8333` изнутри docker-сети (снаружи — проброшенный порт 8333), path-style адресация (`forcePathStyle: true`). S3-креды берутся из `SEAWEEDFS_USER`/`SEAWEEDFS_PASSWORD` при каждом старте контейнера (проверено: смена пароля в `.env` + `docker compose up -d seaweedfs` заменяет ключ, старый перестаёт работать); отдельные ключи под приложения можно завести в веб-админке.
 - **PostgreSQL**: база по умолчанию называется как пользователь (`postgres`); базы под приложения создавайте отдельно. В образе 18+ том монтируется в `/var/lib/postgresql` — не меняйте на `.../data`.

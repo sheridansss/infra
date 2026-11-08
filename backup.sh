@@ -24,7 +24,7 @@ fi
 # конкретного бэкапа записывается в его manifest.txt.
 ENABLED="$(docker compose config --services)"
 SERVICES=()
-for SVC in mongodb postgres redis rabbitmq seaweedfs minio; do
+for SVC in mongodb mongodb9 postgres redis rabbitmq seaweedfs minio; do
   if grep -qx "$SVC" <<< "$ENABLED"; then
     SERVICES+=("$SVC")
   fi
@@ -49,13 +49,15 @@ DEST="backup/$STAMP.partial"
 rm -rf backup/*.partial
 mkdir -p "$DEST"
 
-if want mongodb; then
-  echo "mongodb: mongodump --oplog..."
-  docker compose exec -T mongodb sh -c \
-    'mongodump -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" \
-       --authenticationDatabase admin --oplog --archive --gzip --quiet' \
-    > "$DEST/mongodb.archive.gz"
-fi
+for SVC in mongodb mongodb9; do
+  if want "$SVC"; then
+    echo "$SVC: mongodump --oplog..."
+    docker compose exec -T "$SVC" sh -c \
+      'mongodump -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" \
+         --authenticationDatabase admin --oplog --archive --gzip --quiet' \
+      > "$DEST/$SVC.archive.gz"
+  fi
+done
 
 if want postgres; then
   echo "postgres: pg_dumpall..."

@@ -1,5 +1,5 @@
 # Инфраструктурный стек: MongoDB, Redis, RabbitMQ, SeaweedFS (S3), PostgreSQL,
-# pgAdmin; опционально — MinIO.
+# pgAdmin; опционально — MongoDB 9 и MinIO.
 # Пароли и порты задаются в .env — см. .env.example и README.md.
 # Каждый сервис — в одноимённом профиле: состав стека выбирает COMPOSE_PROFILES
 # в .env, сервис вне списка не поднимается. Применить изменение состава:
@@ -58,6 +58,58 @@ services:
         mongosh -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD" --quiet
         --eval 'const h = db.hello(); if (h.isWritablePrimary && h.setName == "rs0") print("READY");
         else if (!h.setName) rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongodb:27017"}]});'
+        | grep -q READY
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # Независимая MongoDB 9: собственные данные, keyFile и replica set rs9.
+  # Одноразовому контейнеру healthcheck не нужен:
+  # kics-scan ignore-block
+  mongo9-keyfile:
+    image: mongo:9.0
+    profiles: ["mongodb9"]
+    restart: "no"
+    security_opt: ["no-new-privileges:true"]
+    entrypoint:
+      - bash
+      - -ec
+      - |
+        if [ ! -f /keyfile/mongo-keyfile ]; then
+          openssl rand -base64 756 > /keyfile/mongo-keyfile
+          chown mongodb:mongodb /keyfile/mongo-keyfile
+          chmod 400 /keyfile/mongo-keyfile
+        fi
+    volumes:
+      - mongo9_keyfile:/keyfile
+    networks: [backend]
+
+  mongodb9:
+    image: mongo:9.0
+    profiles: ["mongodb9"]
+    hostname: mongodb9
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      mongo9-keyfile:
+        condition: service_completed_successfully
+    command: ["--replSet", "rs9", "--keyFile", "/data/keyfile/mongo-keyfile", "--bind_ip_all"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO9_ROOT_USER:?is not set, see .env.example}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO9_ROOT_PASSWORD:?is not set, see .env.example}
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${MONGO9_PORT:-27018}:27017"
+    volumes:
+      - mongo9_data:/data/db
+      - mongo9_config:/data/configdb
+      - mongo9_keyfile:/data/keyfile:ro
+    networks: [backend]
+    healthcheck:
+      test: >-
+        mongosh -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD" --quiet
+        --eval 'const h = db.hello(); if (h.isWritablePrimary && h.setName == "rs9") print("READY");
+        else if (!h.setName) rs.initiate({_id: "rs9", members: [{_id: 0, host: "mongodb9:27017"}]});'
         | grep -q READY
       interval: 10s
       timeout: 10s
@@ -385,6 +437,19 @@ services:
       MONGODB_URI: mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/?directConnection=true
     networks: [backend]
 
+  # Как и у mongodb-exporter, в образе нет shell; живость проверяет Prometheus.
+  # Отсутствие depends_on позволяет включать monitoring без mongodb9.
+  # kics-scan ignore-block
+  mongodb9-exporter:
+    image: percona/mongodb_exporter:0.54.0
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    command: ["--collect-all", "--compatible-mode"]
+    environment:
+      MONGODB_URI: mongodb://${MONGO9_ROOT_USER}:${MONGO9_ROOT_PASSWORD}@mongodb9:27017/?directConnection=true
+    networks: [backend]
+
 networks:
   backend:
     # фиксированное имя, чтобы приложения из других compose-проектов
@@ -395,6 +460,9 @@ volumes:
   mongo_data:
   mongo_config:
   mongo_keyfile:
+  mongo9_data:
+  mongo9_config:
+  mongo9_keyfile:
   redis_data:
   rabbitmq_data:
   seaweedfs_data:
