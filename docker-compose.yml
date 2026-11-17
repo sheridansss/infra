@@ -164,7 +164,7 @@ services:
   seaweedfs:
     # Объектное S3-хранилище по умолчанию (см. README, «Объектное хранилище»).
     # Режим mini: master + volume + filer + S3 + веб-админка в одном процессе.
-    image: chrislusf/seaweedfs:4.52
+    image: chrislusf/seaweedfs:4.53
     profiles: ["seaweedfs"]
     # стабильный идентификатор узла вместо меняющегося IP контейнера
     hostname: seaweedfs
