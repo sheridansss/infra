@@ -83,7 +83,7 @@ jobs:
       #   ce76b7d0 (Container Capabilities) — cap_drop под entrypoint'ы чужих
       #     официальных образов хрупок при их обновлениях; принято
       - name: KICS misconfig-скан (docker-compose, workflows)
-        uses: checkmarx/kics-github-action@05aa5eb70eede1355220f4ca5238d96b397e30a6 # v2.1.20
+        uses: checkmarx/kics-github-action@4a16c2130b02104dc2624c133d5224080e7cc49b # v2.2.1
         with:
           path: .
           fail_on: high,medium
