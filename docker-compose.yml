@@ -317,7 +317,7 @@ services:
       start_period: 15s
 
   grafana:
-    image: grafana/grafana:13.3.0
+    image: grafana/grafana:13.3.1
     profiles: ["monitoring"]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
