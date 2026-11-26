@@ -4,7 +4,7 @@
 # (проверено: PID 1 работает с UID 70). HEALTHCHECK задан в docker-compose.yml.
 # KICS не учитывает унаследованный entrypoint и healthcheck Compose.
 # kics-scan ignore-line
-FROM postgres:18.6-alpine3.24@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+FROM postgres:18.7-alpine3.24@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
 
 RUN apk add --no-cache 'brotli-libs=1.2.1-r0'
 
