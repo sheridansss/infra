@@ -346,7 +346,7 @@ services:
   # rslave: Docker Desktop не поддерживает propagation для /, а для метрик
   # CPU/RAM/диска она и не нужна.
   node-exporter:
-    image: quay.io/prometheus/node-exporter:v1.12.1
+    image: quay.io/prometheus/node-exporter:v1.13.1
     profiles: ["monitoring"]
     restart: unless-stopped
     security_opt: ["no-new-privileges:true"]
